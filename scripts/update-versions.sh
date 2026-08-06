@@ -60,6 +60,18 @@ fi
 
 BASE_VERSION="${NEW_VERSION%%-*}"
 
+python_version() {
+    local version=$1
+    if [[ $version =~ ^([0-9]+\.[0-9]+\.[0-9]+)-dc([0-9]+)$ ]]; then
+        printf '%s.dev%s+dc%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[2]}"
+        return
+    fi
+    printf '%s\n' "${version/-rc./rc}"
+}
+
+CURRENT_PYTHON_VERSION=$(python_version "$CURRENT_VERSION")
+NEW_PYTHON_VERSION=$(python_version "$NEW_VERSION")
+
 # Check we're in repo root
 if [ ! -f "cmd/bd/version.go" ]; then
     echo -e "${RED}Error: Must run from repository root${NC}"
@@ -103,8 +115,8 @@ update_file ".claude-plugin/marketplace.json" "\"version\": \"$CURRENT_VERSION\"
 
 # 3. MCP Python package
 echo "  • integrations/beads-mcp/*"
-update_file "integrations/beads-mcp/pyproject.toml" "version = \"$CURRENT_VERSION\"" "version = \"$NEW_VERSION\""
-update_file "integrations/beads-mcp/src/beads_mcp/__init__.py" "__version__ = \"$CURRENT_VERSION\"" "__version__ = \"$NEW_VERSION\""
+update_file "integrations/beads-mcp/pyproject.toml" "version = \"$CURRENT_PYTHON_VERSION\"" "version = \"$NEW_PYTHON_VERSION\""
+update_file "integrations/beads-mcp/src/beads_mcp/__init__.py" "__version__ = \"$CURRENT_PYTHON_VERSION\"" "__version__ = \"$NEW_PYTHON_VERSION\""
 # The release workflow's MCP package gate runs `uv sync --locked`, so a
 # pyproject bump without a lock refresh fails the release only in the
 # tag-triggered run — after the tag exists and can no longer be rewritten.
