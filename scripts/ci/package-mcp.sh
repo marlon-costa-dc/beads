@@ -23,6 +23,11 @@ trap cleanup EXIT
 prepare_bd_binary() {
     tmpdir="$(mktemp -d)"
     local target="$tmpdir/bd"
+    local uv_dir
+    uv_dir="$(dirname "$(command -v uv)")"
+    export UV_PROJECT_ENVIRONMENT="$tmpdir/venv"
+    export UV_LINK_MODE=copy
+    unset VIRTUAL_ENV
 
     if [[ -n "${BEADS_TEST_BD_BINARY:-}" ]]; then
         cp "$BEADS_TEST_BD_BINARY" "$target"
@@ -31,7 +36,7 @@ prepare_bd_binary() {
     fi
 
     chmod +x "$target"
-    export PATH="$tmpdir:$PATH"
+    export PATH="$tmpdir:$uv_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     bd version
 }
 
