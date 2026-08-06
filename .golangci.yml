@@ -96,6 +96,44 @@ linters:
           deny:
             - pkg: github.com/steveyegge/beads/internal/workapi
               desc: "internal/httpapi is transport only: a read handler asks the provider for issueops.Reader and passes the whole request - it never builds a filter - see internal/httpapi/reads.go"
+        # The OTHER way past the roles, and the one the rule above does not
+        # close. Denying internal/workapi stops a handler BUILDING a filter; it
+        # does nothing about a handler taking uw.IssueUseCase() and calling the
+        # use case straight, which needs no filter and no builder. That is not a
+        # hypothetical shortcut - it is exactly what the proxied CLI did for
+        # years, and unpicking it is what the role accessors exist for. A second
+        # front door that reached the domain directly would be the same two
+        # implementations again, arriving one handler at a time.
+        #
+        # Deny-by-default over the whole package, so a file added here tomorrow
+        # is covered the moment it exists. The two holes below are named, and
+        # each one is a VALUE the caller assembled, never a use case:
+        #
+        #   server.go     Config.Workspace is domain.ContextInfo, the startup
+        #                 snapshot the embedder hands in. The package resolves
+        #                 no workspace state of its own; this is the type of the
+        #                 thing it is given.
+        #   handlers.go   contextResponse projects that snapshot with
+        #                 domain.PublishedContext - the SAME projection `bd
+        #                 context` publishes, which is where the credential and
+        #                 host-path exclusions live. Reimplementing it here to
+        #                 satisfy a lint rule would be the field-by-field copy
+        #                 that projection exists to prevent.
+        #
+        # Neither file touches a use case, and both are small: the read handlers
+        # (reads.go), the one write (claim.go) and everything added later stay
+        # guarded. Tests are exempt for the reason the rule above exempts them -
+        # they stand up domain fakes to drive the handlers.
+        httpapi-domain-boundary:
+          list-mode: lax
+          files:
+            - "**/internal/httpapi/**"
+            - "!$test"
+            - "!**/internal/httpapi/server.go"
+            - "!**/internal/httpapi/handlers.go"
+          deny:
+            - pkg: github.com/steveyegge/beads/internal/storage/domain
+              desc: "internal/httpapi is transport only: a handler reaches storage through an issueops role accessor on the provider, never through the domain use cases - see internal/httpapi/claim.go"
         # store.IssueReader() is the door to the reader role, and a store wears
         # decorators (telemetry spans, hook firing) that each add their layer in
         # their OWN accessor. A command holding the storage.DoltStorage
@@ -238,7 +276,7 @@ linters:
       #
       # Commands with a direct route and a proxied twin that build the same
       # filter on both:
-      - path: '^cmd/bd/(close|duplicates|find_duplicates|gate|gc|graph|info|label|orphans|purge|search|status|todo|wisp)(_proxied_server)?\.go$'
+      - path: '^cmd/bd/(close|duplicates|find_duplicates|gate|gc|graph|human|info|label|orphans|purge|search|status|todo|wisp)(_proxied_server)?\.go$'
         linters:
           - forbidigo
       # Molecule reporting: each selects the members of one molecule.
@@ -249,8 +287,11 @@ linters:
       - path: '^cmd/bd/(ado|gitlab|jira|linear)\.go$'
         linters:
           - forbidigo
-      # Bulk movement of issues in, out and across prefixes.
-      - path: '^cmd/bd/(export|export_auto|import|migrate|migrate_issues|migrate_personal|rename|rename_prefix)\.go$'
+      # Bulk movement of issues in, out and across prefixes. export_source is
+      # export's storage seam (classic store vs proxied unit of work): it does
+      # not build a filter, it carries the one export.go builds through to
+      # whichever stack is live.
+      - path: '^cmd/bd/(export|export_auto|export_source|import|migrate|migrate_issues|migrate_personal|rename|rename_prefix)\.go$'
         linters:
           - forbidigo
       # doctor's diagnostics and the fixes that follow them.
@@ -258,7 +299,7 @@ linters:
         linters:
           - forbidigo
       # One command each, no family to join.
-      - path: '^cmd/bd/(cleanup|completions|count|gate_discover|human|lint|ping|repo|swarm|template)\.go$'
+      - path: '^cmd/bd/(cleanup|completions|count|gate_discover|lint|ping|repo|swarm|template)\.go$'
         linters:
           - forbidigo
       # Tests are exempt for the same reason the depguard twin exempts them:

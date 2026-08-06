@@ -60,6 +60,24 @@ func (u *fakeUOW) IssueUseCase() domain.IssueUseCase {
 // path, which never asks for one.
 func (u *fakeUOW) ConfigUseCase() domain.ConfigUseCase { return u.readConfig }
 
+// LabelUseCase and DependencyUseCase answer the hydration issueops.Lifecycle
+// runs over the row a claim wrote. Neither carries state: the claimed row's
+// identity is what these tests assert on, and a fake that invented labels or
+// edges would be a second source of truth for it. The full-item shape is pinned
+// against the CLI by the parity oracle in cmd/bd, over real Dolt.
+func (u *fakeUOW) LabelUseCase() domain.LabelUseCase           { return emptyLabels{} }
+func (u *fakeUOW) DependencyUseCase() domain.DependencyUseCase { return emptyDeps{} }
+
+type emptyLabels struct{ domain.LabelUseCase }
+
+func (emptyLabels) GetLabels(context.Context, string) ([]string, error) { return nil, nil }
+
+type emptyDeps struct{ domain.DependencyUseCase }
+
+func (emptyDeps) GetIssueDependencyRecords(context.Context, []string) (map[string][]*types.Dependency, error) {
+	return nil, nil
+}
+
 func (u *fakeUOW) Commit(_ context.Context, message string) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -175,7 +193,10 @@ func newTestServer(t *testing.T, cfg Config) *testServer {
 	if cfg.Addr == "" {
 		cfg.Addr = "127.0.0.1:0"
 	}
-	if cfg.Provider == nil {
+	// The default source, for the tests that care about something else. A
+	// config that already names a source — either one — keeps it: defaulting a
+	// provider onto a roles-backed config would serve the wrong one and pass.
+	if cfg.Provider == nil && cfg.Reader == nil && cfg.Claimer == nil {
 		cfg.Provider = &fakeProvider{}
 	}
 	cfg.Stdout = stdout
