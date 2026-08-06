@@ -9,6 +9,9 @@ const { execSync } = require('child_process');
 // Get package version to determine which release to download
 const packageJson = require('../package.json');
 const VERSION = packageJson.version;
+const RELEASE_REPOSITORY = packageJson.repository.url
+  .replace('https://github.com/', '')
+  .replace(/\.git$/, '');
 
 // Determine platform and architecture
 function getPlatformInfo() {
@@ -260,11 +263,10 @@ async function install() {
     }
 
     // Construct download URL
-    // Format: https://github.com/gastownhall/beads/releases/download/v0.21.5/beads_0.21.5_darwin_amd64.tar.gz
     const releaseVersion = VERSION;
     const archiveExt = platformName === 'windows' ? 'zip' : 'tar.gz';
     const archiveName = `beads_${releaseVersion}_${platformName}_${archName}.${archiveExt}`;
-    const downloadUrl = `https://github.com/gastownhall/beads/releases/download/v${releaseVersion}/${archiveName}`;
+    const downloadUrl = `https://github.com/${RELEASE_REPOSITORY}/releases/download/v${releaseVersion}/${archiveName}`;
     const archivePath = path.join(binDir, archiveName);
 
     // Download the archive
@@ -299,9 +301,9 @@ async function install() {
     console.error(`Error installing bd: ${err.message}`);
     console.error('');
     console.error('Installation failed. You can try:');
-    console.error('1. Installing manually from: https://github.com/gastownhall/beads/releases');
-    console.error('2. Using the install script: curl -fsSL https://raw.githubusercontent.com/gastownhall/beads/main/scripts/install.sh | bash');
-    console.error('3. Opening an issue: https://github.com/gastownhall/beads/issues');
+    console.error(`1. Installing manually from: https://github.com/${RELEASE_REPOSITORY}/releases`);
+    console.error(`2. Using the install script: curl -fsSL https://raw.githubusercontent.com/${RELEASE_REPOSITORY}/main/scripts/install.sh | bash`);
+    console.error(`3. Opening an issue: https://github.com/${RELEASE_REPOSITORY}/issues`);
     process.exit(1);
   }
 }

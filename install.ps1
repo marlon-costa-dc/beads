@@ -1,12 +1,13 @@
 # Beads (bd) Windows installer
 # Usage:
-#   irm https://raw.githubusercontent.com/gastownhall/beads/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/marlon-costa-dc/beads/main/install.ps1 | iex
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$Script:SkipGoInstall = $env:BEADS_INSTALL_SKIP_GOINSTALL -eq "1"
 $Script:SourceOverride = $env:BEADS_INSTALL_SOURCE
+$Script:ReleaseRepository = "marlon-costa-dc/beads"
+$Script:ReleaseTag = "v1.1.2-dc1"
 
 function Write-Info($Message)    { Write-Host "==> $Message" -ForegroundColor Cyan }
 function Write-Success($Message) { Write-Host "==> $Message" -ForegroundColor Green }
@@ -72,54 +73,6 @@ function Test-GoSupport {
     }
 }
 
-function Install-WithGo {
-    if ($Script:SkipGoInstall) {
-        Write-Info "Skipping go install (BEADS_INSTALL_SKIP_GOINSTALL=1)."
-        return $false
-    }
-
-    Write-Info "Installing bd via go install..."
-    try {
-        & go install -tags gms_pure_go github.com/steveyegge/beads/cmd/bd@latest
-        if ($LASTEXITCODE -ne 0) {
-            Write-WarningMsg "go install exited with code $LASTEXITCODE"
-            return $false
-        }
-    } catch {
-        Write-WarningMsg "go install failed: $_"
-        return $false
-    }
-    # Prefer GOBIN if set, otherwise GOPATH/bin
-    $gobin = (& go env GOBIN) 2>$null
-    if ($gobin -and $gobin.Trim() -ne "") {
-        $binDir = $gobin.Trim()
-    } else {
-        $gopath = (& go env GOPATH)
-        if (-not $gopath) {
-            return $true
-        }
-        $binDir = Join-Path $gopath "bin"
-    }
-
-    $bdPath = Join-Path $binDir "bd.exe"
-    # Record where we expect the binary to have been installed in this run
-    $Script:LastInstallPath = $bdPath
-
-    if (-not (Test-Path $bdPath)) {
-        Write-WarningMsg "bd.exe not found in $binDir after install"
-    } else {
-        # Create 'beads' alias
-        Create-BeadsAlias -BinDir $binDir
-    }
-
-    $pathEntries = [Environment]::GetEnvironmentVariable("PATH", "Process").Split([IO.Path]::PathSeparator) | ForEach-Object { $_.Trim() }
-    if (-not ($pathEntries -contains $binDir)) {
-        Write-WarningMsg "$binDir is not in your PATH. Add it with:`n  setx PATH `"$Env:PATH;$binDir`""
-    }
-
-    return $true
-}
-
 function Get-WindowsArch {
     try {
         $arch = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
@@ -182,7 +135,7 @@ function Install-FromRelease {
         return $false
     }
 
-    $apiUrl = "https://api.github.com/repos/gastownhall/beads/releases/latest"
+    $apiUrl = "https://api.github.com/repos/$($Script:ReleaseRepository)/releases/tags/$($Script:ReleaseTag)"
     try {
         $release = Invoke-RestMethod -Uri $apiUrl -Headers @{ "User-Agent" = "beads-install" }
     } catch {
@@ -286,7 +239,7 @@ function Install-FromSource {
             }
         } else {
             Write-Info "Cloning repository..."
-            & git clone --depth 1 https://github.com/gastownhall/beads.git $repoPath
+            & git clone --depth 1 --branch $Script:ReleaseTag "https://github.com/$($Script:ReleaseRepository).git" $repoPath
             if ($LASTEXITCODE -ne 0) {
                 throw "git clone failed with exit code $LASTEXITCODE"
             }
@@ -442,11 +395,8 @@ $installed = $false
 $installed = Install-FromRelease
 if (-not $installed) {
     if ($goSupport.Present -and $goSupport.MeetsRequirement) {
-        $installed = Install-WithGo
-        if (-not $installed) {
-            Write-WarningMsg "go install failed; attempting to build from source..."
-            $installed = Install-FromSource
-        }
+        Write-WarningMsg "Governed release unavailable; building the same source tag..."
+        $installed = Install-FromSource
     } elseif ($goSupport.Present -and -not $goSupport.MeetsRequirement) {
         Write-Err "Go 1.24 or newer is required (found: $($goSupport.RawVersion)). Please upgrade Go or use your package manager."
         Print-GoInstallInstructions
@@ -467,4 +417,3 @@ if ($installed) {
     Write-Err "Installation failed. Please install Go 1.24+ and try again."
     exit 1
 }
-
