@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Beads (bd) installation script
-# Usage: curl -fsSL https://raw.githubusercontent.com/gastownhall/beads/main/scripts/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/marlon-costa-dc/beads/main/scripts/install.sh | bash
 #
 # ⚠️ IMPORTANT: This script must be EXECUTED, never SOURCED
 # ❌ WRONG: source install.sh (will exit your shell on errors)
@@ -10,6 +10,9 @@
 #
 
 set -e
+
+BEADS_RELEASE_REPOSITORY="marlon-costa-dc/beads"
+BEADS_RELEASE_TAG="v1.1.2-dc1"
 
 # Colors
 RED='\033[0;31m'
@@ -113,7 +116,7 @@ verify_release_checksum() {
     local archive_path=$4
 
     local checksums_name="checksums.txt"
-    local checksums_url="https://github.com/gastownhall/beads/releases/download/${version}/${checksums_name}"
+    local checksums_url="https://github.com/${BEADS_RELEASE_REPOSITORY}/releases/download/${version}/${checksums_name}"
 
     if ! release_has_asset "$release_json" "$checksums_name"; then
         log_error "Release metadata is missing ${checksums_name}; refusing to install unverified binary"
@@ -210,7 +213,7 @@ detect_platform() {
             echo "" >&2
             echo "  This bash installer is for macOS/Linux. On Windows, use the PowerShell installer:" >&2
             echo "" >&2
-            echo "    irm https://raw.githubusercontent.com/gastownhall/beads/main/install.ps1 | iex" >&2
+            echo "    irm https://raw.githubusercontent.com/marlon-costa-dc/beads/main/install.ps1 | iex" >&2
             echo "" >&2
             exit 1
             ;;
@@ -225,7 +228,7 @@ detect_platform() {
         echo "  This will install the Linux version of bd, usable only inside WSL." >&2
         echo "  If you want bd available in native Windows (PowerShell, cmd), use:" >&2
         echo "" >&2
-        echo "    irm https://raw.githubusercontent.com/gastownhall/beads/main/install.ps1 | iex" >&2
+        echo "    irm https://raw.githubusercontent.com/marlon-costa-dc/beads/main/install.ps1 | iex" >&2
         echo "" >&2
         # Only show interactive message and pause if running in a terminal (skip in CI/non-interactive shells)
         if [ -t 0 ]; then
@@ -293,9 +296,8 @@ install_from_release() {
     local tmp_dir
     tmp_dir=$(mktemp -d)
 
-    # Get latest release version
-    log_info "Fetching latest release..."
-    local latest_url="https://api.github.com/repos/gastownhall/beads/releases/latest"
+    log_info "Fetching governed release ${BEADS_RELEASE_TAG}..."
+    local latest_url="https://api.github.com/repos/${BEADS_RELEASE_REPOSITORY}/releases/tags/${BEADS_RELEASE_TAG}"
     local version
     local release_json
 
@@ -319,7 +321,7 @@ install_from_release() {
 
     # Download URL
     local archive_name="beads_${version#v}_${platform}.tar.gz"
-    local download_url="https://github.com/gastownhall/beads/releases/download/${version}/${archive_name}"
+    local download_url="https://github.com/${BEADS_RELEASE_REPOSITORY}/releases/download/${version}/${archive_name}"
 
     if ! release_has_asset "$release_json" "$archive_name"; then
         log_warning "No prebuilt archive available for platform ${platform}. Falling back to source installation methods."
@@ -465,63 +467,6 @@ verify_binary_has_cgo() {
     return 0
 }
 
-# Install using go install (fallback).
-#
-# Tries CGO_ENABLED=1 first for an embedded-capable binary. If that fails
-# (host lacks C toolchain or transitive Dolt deps' headers), falls back to
-# CGO_ENABLED=0 which yields a server-mode-only binary that still works on
-# any Go-capable box. See engdocs/ICU-POLICY.md and docs/getting-started/installation.md.
-install_with_go() {
-    log_info "Installing bd using 'go install'..."
-
-    local gobin bin_dir
-    gobin=$(go env GOBIN 2>/dev/null || true)
-    if [ -n "$gobin" ]; then
-        bin_dir="$gobin"
-    else
-        bin_dir="$(go env GOPATH)/bin"
-    fi
-
-    # The repository lives under gastownhall, but the Go module path remains
-    # github.com/steveyegge/beads for compatibility with released tags.
-    if CGO_ENABLED=1 GOFLAGS="${GOFLAGS:+$GOFLAGS }-tags=gms_pure_go" go install github.com/steveyegge/beads/cmd/bd@latest; then
-        log_success "bd installed via go install (embedded-capable)"
-        LAST_INSTALL_PATH="$bin_dir/bd"
-
-        if ! verify_binary_has_cgo "$LAST_INSTALL_PATH" "go install"; then
-            return 1
-        fi
-    else
-        log_warning "go install with CGO failed; retrying without CGO (server-mode-only binary)"
-        if CGO_ENABLED=0 go install github.com/steveyegge/beads/cmd/bd@latest; then
-            log_success "bd installed via go install (CGO_ENABLED=0, server mode only)"
-            log_warning "This bd cannot use embedded Dolt. Run 'bd init --server' to use an external dolt sql-server, or reinstall with a C toolchain for embedded mode."
-            LAST_INSTALL_PATH="$bin_dir/bd"
-        else
-            log_error "go install failed both with and without CGO"
-            print_missing_build_deps_help
-            return 1
-        fi
-    fi
-
-    # Optional local ad-hoc re-sign for macOS (off by default)
-    resign_for_macos "$bin_dir/bd"
-
-    # Create 'beads' alias symlink
-    create_beads_alias "$bin_dir"
-
-    # Check if GOPATH/bin (or GOBIN) is in PATH
-    if [[ ":$PATH:" != *":$bin_dir:"* ]]; then
-        log_warning "$bin_dir is not in your PATH"
-        echo ""
-        echo "Add this to your shell profile (~/.bashrc, ~/.zshrc, etc.):"
-        echo "  export PATH=\"\$PATH:$bin_dir\""
-        echo ""
-    fi
-
-    return 0
-}
-
 # Build from source (last resort)
 build_from_source() {
     log_info "Building bd from source..."
@@ -532,7 +477,7 @@ build_from_source() {
     cd "$tmp_dir"
     log_info "Cloning repository..."
 
-    if git clone --depth 1 https://github.com/gastownhall/beads.git; then
+    if git clone --depth 1 --branch "$BEADS_RELEASE_TAG" "https://github.com/${BEADS_RELEASE_REPOSITORY}.git"; then
         cd beads
         log_info "Building binary..."
 
@@ -711,15 +656,7 @@ main() {
         exit 0
     fi
 
-    log_warning "Failed to install from releases, trying alternative methods..."
-
-    # Try go install as fallback
-    if check_go; then
-        if install_with_go; then
-            verify_installation
-            exit 0
-        fi
-    fi
+    log_warning "Failed to install the governed release; trying its source tag..."
 
     # Try building from source as last resort
     log_warning "Falling back to building from source..."
@@ -747,13 +684,13 @@ main() {
     log_error "Installation failed"
     echo ""
     echo "Manual installation:"
-    echo "  1. Download from https://github.com/gastownhall/beads/releases/latest"
+    echo "  1. Download from https://github.com/${BEADS_RELEASE_REPOSITORY}/releases/tag/${BEADS_RELEASE_TAG}"
     echo "  2. Verify SHA256 checksum against checksums.txt"
     echo "  3. Extract and move 'bd' to your PATH"
     echo ""
-    echo "Or install from source:"
+    echo "Or build the governed source tag:"
     echo "  1. Install Go from https://go.dev/dl/"
-    echo "  2. Run: CGO_ENABLED=1 GOFLAGS=-tags=gms_pure_go go install github.com/steveyegge/beads/cmd/bd@latest"
+    echo "  2. Clone: git clone --depth 1 --branch ${BEADS_RELEASE_TAG} https://github.com/${BEADS_RELEASE_REPOSITORY}.git"
     echo ""
     exit 1
 }
