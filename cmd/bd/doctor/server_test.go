@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/steveyegge/beads/internal/configfile"
+	"github.com/steveyegge/beads/internal/testutil"
 )
 
 func TestIsValidIdentifier(t *testing.T) {
@@ -41,8 +42,11 @@ func TestIsValidIdentifier(t *testing.T) {
 
 // TestCheckServerReachable_UnreachableHost verifies error when server is not reachable.
 func TestCheckServerReachable_UnreachableHost(t *testing.T) {
-	// Use a port that's almost certainly not listening
-	check := checkServerReachable("127.0.0.1", 19999)
+	port, err := testutil.FindFreePort()
+	if err != nil {
+		t.Fatalf("find free port: %v", err)
+	}
+	check := checkServerReachable("127.0.0.1", port)
 
 	if check.Status != StatusError {
 		t.Errorf("Status = %q, want %q", check.Status, StatusError)
