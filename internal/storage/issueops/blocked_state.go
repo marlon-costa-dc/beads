@@ -178,14 +178,14 @@ func recomputeIsBlockedPassForIssuesInTx(ctx context.Context, tx DBTX, ids []str
 		return 0, nil
 	}
 
-	return runMarkUnmarkBatchedInTx(ctx, tx, markBlockedTemplateForIssues(), unmarkBlockedTemplateForIssues(), ids)
+	return runMarkUnmarkBatchedInTx(ctx, tx, markBlockedTemplateForIssues(), unmarkBlockedTemplateForIssues(), "i.id", "i.id", ids)
 }
 
 func markIsBlockedPassForIssuesInTx(ctx context.Context, tx DBTX, ids []string) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	return runMarkBatchedInTx(ctx, tx, markBlockedTemplateForIssues(), ids)
+	return runMarkBatchedInTx(ctx, tx, markBlockedTemplateForIssues(), "i.id", ids)
 }
 
 // The mark/unmark templates explicitly assign updated_at to itself:
@@ -195,10 +195,21 @@ func markIsBlockedPassForIssuesInTx(ctx context.Context, tx DBTX, ids []string) 
 // clones that recomputed the same flip at different times, bd-578h9.19) and
 // makes stale-guard/conflict-guard consumers treat the row as user-edited.
 // An explicit assignment suppresses the ON UPDATE clause.
+//
+// The single %s at the head of the WHERE is the scope: an IN-list for
+// ID-scoped passes, or the literal TRUE for the full-table pass. On a loaded
+// Dolt server the 200-placeholder IN-list forces the correlated EXISTS
+// subqueries into a per-row evaluation plan that measured 5-40x slower than
+// the same predicate unscoped (full-table 0.25s vs ~1s per 200-row batch,
+// degrading further inside a long accumulated transaction; hq's 4374 wisps
+// pushed a full recompute past 10 minutes, which every timed caller then
+// killed as "context canceled" (hq-wb1i)). The predicates are idempotent, so
+// the unscoped UPDATE is exactly the batched one restricted to the whole
+// table.
 func markBlockedTemplateForIssues() string {
 	return fmt.Sprintf(`
 		UPDATE issues i SET i.is_blocked = 1, i.updated_at = i.updated_at
-		WHERE i.id IN (%%s)
+		WHERE %%s
 		  AND i.is_blocked = 0
 		  AND i.status <> 'closed' AND i.status <> 'pinned'
 		  AND (
@@ -242,7 +253,7 @@ func markBlockedTemplateForIssues() string {
 func unmarkBlockedTemplateForIssues() string {
 	return fmt.Sprintf(`
 		UPDATE issues i SET i.is_blocked = 0, i.updated_at = i.updated_at
-		WHERE i.id IN (%%s)
+		WHERE %%s
 		  AND i.is_blocked = 1
 		  AND (
 		    i.status = 'closed' OR i.status = 'pinned'
@@ -291,20 +302,20 @@ func recomputeIsBlockedPassForWispsInTx(ctx context.Context, tx DBTX, ids []stri
 		return 0, nil
 	}
 
-	return runMarkUnmarkBatchedInTx(ctx, tx, markBlockedTemplateForWisps(), unmarkBlockedTemplateForWisps(), ids)
+	return runMarkUnmarkBatchedInTx(ctx, tx, markBlockedTemplateForWisps(), unmarkBlockedTemplateForWisps(), "w.id", "w.id", ids)
 }
 
 func markIsBlockedPassForWispsInTx(ctx context.Context, tx DBTX, ids []string) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	return runMarkBatchedInTx(ctx, tx, markBlockedTemplateForWisps(), ids)
+	return runMarkBatchedInTx(ctx, tx, markBlockedTemplateForWisps(), "w.id", ids)
 }
 
 func markBlockedTemplateForWisps() string {
 	return fmt.Sprintf(`
 		UPDATE wisps w SET w.is_blocked = 1, w.updated_at = w.updated_at
-		WHERE w.id IN (%%s)
+		WHERE %%s
 		  AND w.is_blocked = 0
 		  AND w.status <> 'closed' AND w.status <> 'pinned'
 		  AND (
@@ -348,7 +359,7 @@ func markBlockedTemplateForWisps() string {
 func unmarkBlockedTemplateForWisps() string {
 	return fmt.Sprintf(`
 		UPDATE wisps w SET w.is_blocked = 0, w.updated_at = w.updated_at
-		WHERE w.id IN (%%s)
+		WHERE %%s
 		  AND w.is_blocked = 1
 		  AND (
 		    w.status = 'closed' OR w.status = 'pinned'
@@ -391,8 +402,21 @@ func unmarkBlockedTemplateForWisps() string {
 	`, waitsForGateBlockedSQL)
 }
 
+// recomputeIsBlockedPassForAllIssuesInTx runs the idempotent mark/unmark
+// predicates unscoped over every issue (see runMarkUnmarkFullTableInTx for
+// why the full pass must not go through IN-list batching, hq-wb1i).
+func recomputeIsBlockedPassForAllIssuesInTx(ctx context.Context, tx DBTX) (int64, error) {
+	return runMarkUnmarkFullTableInTx(ctx, tx, markBlockedTemplateForIssues(), unmarkBlockedTemplateForIssues())
+}
+
+// recomputeIsBlockedPassForAllWispsInTx is the wisp counterpart of
+// recomputeIsBlockedPassForAllIssuesInTx.
+func recomputeIsBlockedPassForAllWispsInTx(ctx context.Context, tx DBTX) (int64, error) {
+	return runMarkUnmarkFullTableInTx(ctx, tx, markBlockedTemplateForWisps(), unmarkBlockedTemplateForWisps())
+}
+
 //nolint:gosec // G201: callers pass constant templates; only IN-clause placeholders are formatted in.
-func runMarkUnmarkBatchedInTx(ctx context.Context, tx DBTX, markTmpl, unmarkTmpl string, ids []string) (int64, error) {
+func runMarkUnmarkBatchedInTx(ctx context.Context, tx DBTX, markTmpl, unmarkTmpl, markScope, unmarkScope string, ids []string) (int64, error) {
 	var changed int64
 	for start := 0; start < len(ids); start += queryBatchSize {
 		end := start + queryBatchSize
@@ -401,7 +425,7 @@ func runMarkUnmarkBatchedInTx(ctx context.Context, tx DBTX, markTmpl, unmarkTmpl
 		}
 		placeholders, args := buildSQLInClause(ids[start:end])
 
-		res, err := tx.ExecContext(ctx, fmt.Sprintf(markTmpl, placeholders), args...)
+		res, err := tx.ExecContext(ctx, fmt.Sprintf(markTmpl, markScope+" IN ("+placeholders+")"), args...)
 		if err != nil {
 			return changed, fmt.Errorf("recompute is_blocked (mark): %w", err)
 		}
@@ -411,7 +435,7 @@ func runMarkUnmarkBatchedInTx(ctx context.Context, tx DBTX, markTmpl, unmarkTmpl
 		}
 		changed += n
 
-		res, err = tx.ExecContext(ctx, fmt.Sprintf(unmarkTmpl, placeholders), args...)
+		res, err = tx.ExecContext(ctx, fmt.Sprintf(unmarkTmpl, unmarkScope+" IN ("+placeholders+")"), args...)
 		if err != nil {
 			return changed, fmt.Errorf("recompute is_blocked (unmark): %w", err)
 		}
@@ -424,8 +448,36 @@ func runMarkUnmarkBatchedInTx(ctx context.Context, tx DBTX, markTmpl, unmarkTmpl
 	return changed, nil
 }
 
+// runMarkUnmarkFullTableInTx runs the idempotent mark/unmark predicates
+// unscoped over the whole table in one statement each. The IN-list batching
+// above exists for ID-scoped passes; for the full recompute it is pure loss:
+// the 200-placeholder IN forces a per-row evaluation plan for the correlated
+// EXISTS subqueries that measured 5-40x slower than the same predicate
+// unscoped on a loaded shared server (hq: 0.25s unscoped vs minutes batched,
+// hq-wb1i).
+//
+//nolint:gosec // G201: templates are package constants; the scope is the literal empty string.
+func runMarkUnmarkFullTableInTx(ctx context.Context, tx DBTX, markTmpl, unmarkTmpl string) (int64, error) {
+	var changed int64
+
+	res, err := tx.ExecContext(ctx, fmt.Sprintf(markTmpl, "1=1"))
+	if err != nil {
+		return changed, fmt.Errorf("recompute is_blocked (mark): %w", err)
+	}
+	n, _ := res.RowsAffected()
+	changed += n
+
+	res, err = tx.ExecContext(ctx, fmt.Sprintf(unmarkTmpl, "1=1"))
+	if err != nil {
+		return changed, fmt.Errorf("recompute is_blocked (unmark): %w", err)
+	}
+	n, _ = res.RowsAffected()
+	changed += n
+	return changed, nil
+}
+
 //nolint:gosec // G201: callers pass constant templates; only IN-clause placeholders are formatted in.
-func runMarkBatchedInTx(ctx context.Context, tx DBTX, markTmpl string, ids []string) (int64, error) {
+func runMarkBatchedInTx(ctx context.Context, tx DBTX, markTmpl, markScope string, ids []string) (int64, error) {
 	var changed int64
 	for start := 0; start < len(ids); start += queryBatchSize {
 		end := start + queryBatchSize
@@ -434,7 +486,7 @@ func runMarkBatchedInTx(ctx context.Context, tx DBTX, markTmpl string, ids []str
 		}
 		placeholders, args := buildSQLInClause(ids[start:end])
 
-		res, err := tx.ExecContext(ctx, fmt.Sprintf(markTmpl, placeholders), args...)
+		res, err := tx.ExecContext(ctx, fmt.Sprintf(markTmpl, markScope+" IN ("+placeholders+")"), args...)
 		if err != nil {
 			return changed, fmt.Errorf("mark is_blocked: %w", err)
 		}
