@@ -94,7 +94,7 @@ func TestRunMarkUnmarkBatchedInTxPropagatesRowsAffectedErrors(t *testing.T) {
 			}
 
 			_, err := runMarkUnmarkBatchedInTx(
-				context.Background(), db, markBlockedTemplateForIssues(), unmarkBlockedTemplateForIssues(), []string{"issue-1"},
+				context.Background(), db, markBlockedTemplateForIssues(), unmarkBlockedTemplateForIssues(), "i.id", "i.id", []string{"issue-1"},
 			)
 			if !errors.Is(err, sentinel) {
 				t.Fatalf("err = %v, want rows-affected error", err)

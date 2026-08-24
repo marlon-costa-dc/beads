@@ -51,10 +51,16 @@ func TestServerSettlementSQLCommitResponseLossIsIndeterminate(t *testing.T) {
 		mock.ExpectQuery(regexp.QuoteMeta("SELECT DISTINCT table_name FROM dolt_status WHERE table_name IN (?,?)")).
 			WithArgs("issues", "dependencies").
 			WillReturnRows(sqlmock.NewRows([]string{"table_name"}))
-		mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM issues")).
-			WillReturnRows(sqlmock.NewRows([]string{"id"}))
-		mock.ExpectQuery(regexp.QuoteMeta("SELECT id FROM wisps")).
-			WillReturnRows(sqlmock.NewRows([]string{"id"}))
+		// Full-table recompute (hq-wb1i): no id listing, the idempotent
+		// mark/unmark predicates run unscoped over each table.
+		mock.ExpectExec(regexp.QuoteMeta("UPDATE issues i SET i.is_blocked = 1")).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec(regexp.QuoteMeta("UPDATE issues i SET i.is_blocked = 0")).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec(regexp.QuoteMeta("UPDATE wisps w SET w.is_blocked = 1")).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec(regexp.QuoteMeta("UPDATE wisps w SET w.is_blocked = 0")).
+			WillReturnResult(sqlmock.NewResult(0, 0))
 		responseLoss := errors.New("full recompute commit response lost")
 		mock.ExpectCommit().WillReturnError(responseLoss)
 

@@ -2,7 +2,6 @@ package doctor
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
