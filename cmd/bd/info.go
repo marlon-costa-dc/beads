@@ -209,6 +209,13 @@ type VersionChange struct {
 // versionChanges contains agent-actionable changes for recent versions
 var versionChanges = []VersionChange{
 	{
+		Version: "1.1.2-dc2",
+		Date:    "2026-08-23",
+		Changes: []string{
+			"PERF: full blocked-recompute pass runs the idempotent mark/unmark predicates unscoped instead of through 200-placeholder IN-lists (0.25s vs >10min on a 4374-wisp hq); fixes bd sync dying as 'recompute is_blocked (mark): context canceled' (hq-wb1i).",
+		},
+	},
+	{
 		Version: "1.1.2",
 		Date:    "2026-07-26",
 		Changes: []string{
