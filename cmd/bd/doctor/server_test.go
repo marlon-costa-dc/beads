@@ -46,6 +46,7 @@ func TestCheckServerReachable_UnreachableHost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("find free port: %v", err)
 	}
+
 	check := checkServerReachable("127.0.0.1", port)
 
 	if check.Status != StatusError {

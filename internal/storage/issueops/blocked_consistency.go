@@ -244,19 +244,33 @@ func writeDiffSignatureValue(b *strings.Builder, v any) {
 // resolved by hand (bd-6dnrw.37). It is idempotent — on a consistent database
 // it changes nothing and returns 0.
 func RecomputeAllIsBlockedInTx(ctx context.Context, tx DBTX) (int64, error) {
-	issueIDs, err := allIDs(ctx, tx, "issues")
-	if err != nil {
-		return 0, fmt.Errorf("recompute all is_blocked: list issues: %w", err)
-	}
-	wispIDs, err := allIDs(ctx, tx, "wisps")
-	if err != nil {
-		if isTableNotExistError(err) {
-			wispIDs = nil
-		} else {
-			return 0, fmt.Errorf("recompute all is_blocked: list wisps: %w", err)
+	// Full-table passes, not the ID batched ones: this is the always-available
+	// full repair, and on a loaded shared server the 200-placeholder IN-lists
+	// measured 5-40x slower than the same idempotent predicates unscoped
+	// (hq: 0.25s vs >10min, hq-wb1i). The fixpoint loop below is unchanged.
+	var total int64
+	for {
+		var changed int64
+		n, err := recomputeIsBlockedPassForAllIssuesInTx(ctx, tx)
+		if err != nil {
+			return total, fmt.Errorf("recompute all is_blocked: %w", err)
+		}
+		changed += n
+		n, err = recomputeIsBlockedPassForAllWispsInTx(ctx, tx)
+		if err != nil {
+			if isTableNotExistError(err) {
+				err = nil
+				n = 0
+			} else {
+				return total, fmt.Errorf("recompute all is_blocked: %w", err)
+			}
+		}
+		changed += n
+		total += changed
+		if changed == 0 {
+			return total, nil
 		}
 	}
-	return recomputeIsBlockedCounting(ctx, tx, issueIDs, wispIDs)
 }
 
 // recomputeIsBlockedCounting is RecomputeIsBlockedInTx with a corrected-row
