@@ -39,7 +39,7 @@ func TestPRCoreScriptKeepsGoTemporaryBuildsOutOfSystemTmp(t *testing.T) {
 	if len(call) == 0 {
 		t.Fatal("pr-core did not invoke go test")
 	}
-	for _, name := range []string{"TMPDIR", "GOTMPDIR", "GOCACHE"} {
+	for _, name := range []string{"TMPDIR", "GOTMPDIR"} {
 		value := env[name]
 		if value == "" {
 			t.Fatalf("%s was not exported to go test", name)
@@ -47,21 +47,9 @@ func TestPRCoreScriptKeepsGoTemporaryBuildsOutOfSystemTmp(t *testing.T) {
 		if value == "/tmp" || strings.HasPrefix(value, "/tmp/") {
 			t.Fatalf("%s still uses system /tmp: %q", name, value)
 		}
-		wantComponent := "/beads/test-tmp/"
-		if name == "GOCACHE" {
-			wantComponent = "/beads/go-build"
+		if !strings.Contains(value, ".test-tmp") {
+			t.Fatalf("%s = %q, want project-scoped .test-tmp", name, value)
 		}
-		if !strings.Contains(value, wantComponent) {
-			t.Fatalf("%s = %q, want user-cache component %q", name, value, wantComponent)
-		}
-	}
-}
-
-func TestPRCoreScriptAcceptsPersistentGoCacheOverride(t *testing.T) {
-	cache := t.TempDir()
-	_, env := prCoreGoTestCallWithEnv(t, []string{"BEADS_TEST_GOCACHE=" + cache})
-	if got := env["GOCACHE"]; got != cache {
-		t.Fatalf("GOCACHE = %q, want override", got)
 	}
 }
 
@@ -89,7 +77,7 @@ func prCoreGoTestCallWithEnv(t *testing.T, extraEnv []string) ([]string, map[str
 set -eu
 printf '%s\0' "$#" >>"$GO_CALL_LOG"
 printf '%s\0' "$@" >>"$GO_CALL_LOG"
-printf 'TMPDIR=%s\nGOTMPDIR=%s\nGOCACHE=%s\n' "${TMPDIR:-}" "${GOTMPDIR:-}" "${GOCACHE:-}" >"$GO_ENV_LOG"
+printf 'TMPDIR=%s\nGOTMPDIR=%s\n' "${TMPDIR:-}" "${GOTMPDIR:-}" >"$GO_ENV_LOG"
 case "${1:-}" in
 env) shift; for name in "$@"; do printf '%s\n' ""; done ;;
 esac
