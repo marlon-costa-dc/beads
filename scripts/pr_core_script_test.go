@@ -39,7 +39,7 @@ func TestPRCoreScriptKeepsGoTemporaryBuildsOutOfSystemTmp(t *testing.T) {
 	if len(call) == 0 {
 		t.Fatal("pr-core did not invoke go test")
 	}
-	for _, name := range []string{"TMPDIR", "GOTMPDIR"} {
+	for _, name := range []string{"TMPDIR", "GOTMPDIR", "GOCACHE"} {
 		value := env[name]
 		if value == "" {
 			t.Fatalf("%s was not exported to go test", name)
@@ -77,7 +77,7 @@ func prCoreGoTestCallWithEnv(t *testing.T, extraEnv []string) ([]string, map[str
 set -eu
 printf '%s\0' "$#" >>"$GO_CALL_LOG"
 printf '%s\0' "$@" >>"$GO_CALL_LOG"
-printf 'TMPDIR=%s\nGOTMPDIR=%s\n' "${TMPDIR:-}" "${GOTMPDIR:-}" >"$GO_ENV_LOG"
+printf 'TMPDIR=%s\nGOTMPDIR=%s\nGOCACHE=%s\n' "${TMPDIR:-}" "${GOTMPDIR:-}" "${GOCACHE:-}" >"$GO_ENV_LOG"
 case "${1:-}" in
 env) shift; for name in "$@"; do printf '%s\n' ""; done ;;
 esac
