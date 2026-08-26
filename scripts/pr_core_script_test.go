@@ -47,8 +47,8 @@ func TestPRCoreScriptKeepsGoTemporaryBuildsOutOfSystemTmp(t *testing.T) {
 		if value == "/tmp" || strings.HasPrefix(value, "/tmp/") {
 			t.Fatalf("%s still uses system /tmp: %q", name, value)
 		}
-		if !strings.Contains(value, ".test-tmp") {
-			t.Fatalf("%s = %q, want project-scoped .test-tmp", name, value)
+		if !strings.Contains(value, "/beads/test-tmp/") {
+			t.Fatalf("%s = %q, want user-cache beads/test-tmp", name, value)
 		}
 	}
 }
