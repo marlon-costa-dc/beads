@@ -251,46 +251,34 @@ func TestSchemaSkewError_UserMessage_ExactCopy(t *testing.T) {
 	}
 }
 
-func TestSchemaSkewError_UserMessage_Accidental12Window_ExactCopy(t *testing.T) {
+func TestSchemaSkewError_UserMessage_PreV62Window_UsesGenericUpgradeAdvice(t *testing.T) {
 	e := &SchemaSkewError{DBVersion: 65, BinaryVersion: 53}
-	want := "schema version mismatch: database is at v65, binary knows up to v53 (12 migrations ahead)\n" +
-		"\n" +
-		"  This database was migrated by the accidental, untested v1.2.0/v1.2.1\n" +
-		"  release. This binary is the supported release; do not reinstall v1.2.1.\n" +
-		"\n" +
-		"  Recovery guide (rolls the schema cursor back to v53, ~2 minutes):\n" +
-		"    https://github.com/gastownhall/beads/blob/v1.2.2/docs/RECOVERY-1.2.1.md\n" +
-		"\n" +
-		"  To keep working right now, before recovering (verified safe for this\n" +
-		"  schema range; audit-event versioning is paused until you recover):\n" +
-		"    BD_IGNORE_SCHEMA_SKEW=1 bd <command>\n" +
-		"    bd --ignore-schema-skew <command>\n"
-	if got := e.UserMessage(); got != want {
-		t.Errorf("UserMessage() mismatch.\ngot:\n%s\nwant:\n%s", got, want)
+	got := e.UserMessage()
+	if !strings.Contains(got, "Your bd binary is stale") {
+		t.Errorf("UserMessage() must use generic upgrade advice:\n%s", got)
+	}
+	if strings.Contains(got, "RECOVERY-1.2.1.md") {
+		t.Errorf("UserMessage() must not direct schema62 users to the retired v53 rollback:\n%s", got)
 	}
 }
 
-// The incident copy must apply to the whole (53, 65] window, and ONLY to a
-// binary whose own schema ceiling is v53 — a future binary at v66+ seeing a
-// forward-drifted DB must get the generic stale-binary advice again, as must
-// a v53 binary seeing a DB past v65 (some post-1.2.x migrator produced it).
-func TestSchemaSkewError_UserMessage_Accidental12Window_Bounds(t *testing.T) {
+// The schema62 line no longer supports rolling a database cursor back to v53.
+// Every forward-skew combination receives the same fail-closed upgrade advice.
+func TestSchemaSkewError_UserMessage_NoRetiredV53RollbackWindow(t *testing.T) {
 	cases := []struct {
 		name       string
 		db, binary int
-		incident   bool
 	}{
-		{"window floor", 54, 53, true},
-		{"window ceiling", 65, 53, true},
-		{"past ceiling", 66, 53, false},
-		{"future binary", 70, 66, false},
+		{"former window floor", 54, 53},
+		{"former window ceiling", 65, 53},
+		{"past former ceiling", 66, 53},
+		{"future binary", 70, 66},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := &SchemaSkewError{DBVersion: tc.db, BinaryVersion: tc.binary}
-			gotIncident := strings.Contains(e.UserMessage(), "RECOVERY-1.2.1.md")
-			if gotIncident != tc.incident {
-				t.Errorf("UserMessage() incident copy = %v, want %v:\n%s", gotIncident, tc.incident, e.UserMessage())
+			if strings.Contains(e.UserMessage(), "RECOVERY-1.2.1.md") {
+				t.Errorf("UserMessage() contains retired v53 rollback advice:\n%s", e.UserMessage())
 			}
 		})
 	}
