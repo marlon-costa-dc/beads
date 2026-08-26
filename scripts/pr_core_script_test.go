@@ -47,9 +47,21 @@ func TestPRCoreScriptKeepsGoTemporaryBuildsOutOfSystemTmp(t *testing.T) {
 		if value == "/tmp" || strings.HasPrefix(value, "/tmp/") {
 			t.Fatalf("%s still uses system /tmp: %q", name, value)
 		}
-		if !strings.Contains(value, "/beads/test-tmp/") {
-			t.Fatalf("%s = %q, want user-cache beads/test-tmp", name, value)
+		wantComponent := "/beads/test-tmp/"
+		if name == "GOCACHE" {
+			wantComponent = "/beads/go-build"
 		}
+		if !strings.Contains(value, wantComponent) {
+			t.Fatalf("%s = %q, want user-cache component %q", name, value, wantComponent)
+		}
+	}
+}
+
+func TestPRCoreScriptAcceptsPersistentGoCacheOverride(t *testing.T) {
+	cache := t.TempDir()
+	_, env := prCoreGoTestCallWithEnv(t, []string{"BEADS_TEST_GOCACHE=" + cache})
+	if got := env["GOCACHE"]; got != cache {
+		t.Fatalf("GOCACHE = %q, want override", got)
 	}
 }
 
