@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -473,27 +472,18 @@ func TestCircuitBreakerDir_UsesSubdirectory(t *testing.T) {
 	}
 }
 
-// TestCircuitBreakerDir_DerivedFromTempDir verifies the breaker directory is
-// derived from os.TempDir() rather than a hardcoded "/tmp", so on Windows it
-// lands under %TEMP% instead of C:\tmp (GH#4636).
-func TestCircuitBreakerDir_DerivedFromTempDir(t *testing.T) {
-	custom := t.TempDir()
-	// os.TempDir() honors these across platforms (TMPDIR on unix; TMP/TEMP on
-	// Windows), so the breaker dir must follow.
-	t.Setenv("TMPDIR", custom)
-	t.Setenv("TMP", custom)
-	t.Setenv("TEMP", custom)
+// TestCircuitBreakerDir_UsesUserCache verifies production breaker state follows
+// the user lifecycle rather than the process/system temporary lifecycle.
+func TestCircuitBreakerDir_UsesUserCache(t *testing.T) {
+	cacheRoot := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheRoot)
 
-	got := circuitBreakerDir()
-	if want := filepath.Join(os.TempDir(), "beads-circuit"); got != want {
-		t.Errorf("circuitBreakerDir() = %q, want %q", got, want)
+	got := CircuitBreakerDir()
+	if want := filepath.Join(cacheRoot, "beads", "circuit"); got != want {
+		t.Errorf("CircuitBreakerDir() = %q, want %q", got, want)
 	}
-	if !strings.HasPrefix(got, os.TempDir()) {
-		t.Errorf("circuitBreakerDir() = %q, want it under os.TempDir() %q", got, os.TempDir())
-	}
-	// When the temp root is not "/tmp", the path must not be the old literal.
-	if os.TempDir() != "/tmp" && got == "/tmp/beads-circuit" {
-		t.Errorf("circuitBreakerDir() still hardcoded to /tmp: %q", got)
+	if got == filepath.Join(os.TempDir(), "beads-circuit") {
+		t.Errorf("CircuitBreakerDir() = %q, must not use the legacy system-temp destination", got)
 	}
 }
 
@@ -526,7 +516,7 @@ func TestCircuitBreakerPathsTestOverrideIsolatesCurrentAndLegacyState(t *testing
 func TestCircuitBreakerPathsProductionDefaultsUnchanged(t *testing.T) {
 	t.Setenv(testCircuitBreakerDirEnv, "")
 	dir, legacy := circuitBreakerPaths()
-	if want := circuitBreakerDir(); dir != want {
+	if want := CircuitBreakerDir(); dir != want {
 		t.Fatalf("production circuit directory = %q, want %q", dir, want)
 	}
 	if legacy != legacyCircuitBreakerFile {
@@ -537,7 +527,7 @@ func TestCircuitBreakerPathsProductionDefaultsUnchanged(t *testing.T) {
 func TestCircuitBreakerPathsRejectsRelativeOverride(t *testing.T) {
 	t.Setenv(testCircuitBreakerDirEnv, "relative-test-dir")
 	dir, legacy := circuitBreakerPaths()
-	if dir != circuitBreakerDir() || legacy != legacyCircuitBreakerFile {
+	if dir != CircuitBreakerDir() || legacy != legacyCircuitBreakerFile {
 		t.Fatalf("relative override selected paths dir=%q legacy=%q", dir, legacy)
 	}
 }

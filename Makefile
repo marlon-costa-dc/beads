@@ -314,7 +314,11 @@ ifeq ($(OS),Windows_NT)
 	@echo "Installed bd.exe to $(INSTALL_DIR)/bd.exe"
 else
 	@rm -f $(INSTALL_DIR)/bd
-	@cp $(BUILD_DIR)/bd $(INSTALL_DIR)/bd
+	@if [ "$$(uname -s)" = Linux ]; then \
+		cp --reflink=auto $(BUILD_DIR)/bd $(INSTALL_DIR)/bd; \
+	else \
+		cp $(BUILD_DIR)/bd $(INSTALL_DIR)/bd; \
+	fi
 	@echo "Installed bd to $(INSTALL_DIR)/bd"
 	@rm -f $(INSTALL_DIR)/beads
 	@ln -s bd $(INSTALL_DIR)/beads

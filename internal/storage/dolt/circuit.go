@@ -60,8 +60,8 @@ type circuitState struct {
 // degradation in one project from tripping the breaker for all worktrees
 // sharing the same server (GH#3140).
 //
-// It uses a file under os.TempDir() for cross-process state sharing and an in-process
-// mutex for thread safety within a single process.
+// It uses a file under the user's cache directory for cross-process state
+// sharing and an in-process mutex for thread safety within a single process.
 type circuitBreaker struct {
 	host     string
 	port     int
@@ -85,14 +85,23 @@ func maybeNewCircuitBreaker(host string, port int, database string) *circuitBrea
 	return newCircuitBreaker(host, port, database)
 }
 
-// circuitBreakerDir returns the dedicated directory for circuit breaker state
-// files. Using a subdirectory avoids scanning all of the temp root (which may
-// contain millions of entries) when cleaning up stale breaker files on
-// startup. Derived from os.TempDir() so it is correct on every platform:
-// hardcoding "/tmp" resolved to C:\tmp on Windows, silently accumulating
-// breaker files there forever (GH#4636).
-func circuitBreakerDir() string {
-	return filepath.Join(os.TempDir(), "beads-circuit")
+// CircuitBreakerDir returns the dedicated directory for circuit breaker state.
+// Breaker files coordinate independent bd processes and outlive an individual
+// invocation, so the system temporary directory is the wrong lifecycle owner.
+// Prefer the OS user cache directory and fail closed when no absolute user
+// directory can be resolved; falling back to os.TempDir would recreate the
+// unbounded system-filesystem pressure this boundary prevents.
+func CircuitBreakerDir() string {
+	if cacheDir, err := os.UserCacheDir(); err == nil && filepath.IsAbs(cacheDir) {
+		return filepath.Join(cacheDir, "beads", "circuit")
+	}
+	if configDir, err := os.UserConfigDir(); err == nil && filepath.IsAbs(configDir) {
+		return filepath.Join(configDir, "beads", "cache", "circuit")
+	}
+	if homeDir, err := os.UserHomeDir(); err == nil && filepath.IsAbs(homeDir) {
+		return filepath.Join(homeDir, ".cache", "beads", "circuit")
+	}
+	panic("beads: cannot resolve an absolute user cache directory for circuit breaker state")
 }
 
 const (
@@ -107,7 +116,7 @@ func circuitBreakerPaths() (dir, legacyFile string) {
 	if testDir := filepath.Clean(os.Getenv(testCircuitBreakerDirEnv)); filepath.IsAbs(testDir) {
 		return testDir, filepath.Join(testDir, "beads-dolt-circuit-0.json")
 	}
-	return circuitBreakerDir(), legacyCircuitBreakerFile
+	return CircuitBreakerDir(), legacyCircuitBreakerFile
 }
 
 // newCircuitBreaker creates a circuit breaker for the given Dolt server
@@ -131,7 +140,7 @@ func newCircuitBreaker(host string, port int, database string) *circuitBreaker {
 	}
 
 	dir, _ := circuitBreakerPaths()
-	_ = os.MkdirAll(dir, 0755)
+	_ = os.MkdirAll(dir, 0700)
 	return &circuitBreaker{
 		host:     host,
 		port:     port,
@@ -363,7 +372,7 @@ func CleanStaleCircuitBreakerFiles() {
 	// Clean stale files in the dedicated subdirectory (fast — typically 0-2
 	// files). Only open/half-open state past circuitStaleTTL is removed here;
 	// closed files are left alone since a live server keeps writing them.
-	_ = os.MkdirAll(dir, 0755)
+	_ = os.MkdirAll(dir, 0700)
 	cleanStaleCircuitBreakerFilesIn(dir, false)
 
 	// Also sweep the legacy hardcoded "/tmp/beads-circuit" location
