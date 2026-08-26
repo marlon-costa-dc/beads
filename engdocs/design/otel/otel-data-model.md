@@ -1,6 +1,6 @@
 # OpenTelemetry Data Model
 
-Last reviewed: 2026-05-08
+Last reviewed: 2026-08-26
 
 Freshness source: `internal/telemetry/`, `internal/storage/dolt/store.go`,
 `internal/compact/haiku.go`, `cmd/bd/find_duplicates.go`, and hook execution
@@ -29,6 +29,14 @@ OTel SDK names use **dot notation** internally. Prometheus-compatible backends (
 | `bd.db.lock_wait_ms` | `bd_db_lock_wait_ms` |
 | `bd.db.circuit_trips` | `bd_db_circuit_trips_total` |
 | `bd.db.circuit_rejected` | `bd_db_circuit_rejected_total` |
+| `bd.db.serialization_errors` | `bd_db_serialization_errors_total` |
+| `bd.db.conn_acquire_ms` | `bd_db_conn_acquire_ms` |
+| `bd.db.pool_wait_count` | `bd_db_pool_wait_count_total` |
+| `bd.db.pool_wait_ms` | `bd_db_pool_wait_ms` |
+| `bd.db.pool_open` | `bd_db_pool_open` |
+| `bd.db.pool_in_use` | `bd_db_pool_in_use` |
+| `bd.db.pool_idle` | `bd_db_pool_idle` |
+| `bd.db.pool_max_open` | `bd_db_pool_max_open` |
 | `bd.ai.input_tokens` | `bd_ai_input_tokens_total` |
 | `bd.ai.output_tokens` | `bd_ai_output_tokens_total` |
 | `bd.ai.request.duration` | `bd_ai_request_duration_ms` |
@@ -223,6 +231,15 @@ Emitted for DOLT_MERGE operations.
 |---|---|---|
 | `dolt.merge_branch` | string | Branch being merged |
 
+### `dolt.merge_with_strategy`
+
+Emitted for strategy-aware DOLT_MERGE operations.
+
+| Attribute | Type | Description |
+|---|---|---|
+| `dolt.merge_branch` | string | Branch being merged |
+| `dolt.merge_strategy` | string | Requested merge strategy |
+
 ### `dolt.branch`
 
 Emitted for DOLT_BRANCH operations.
@@ -315,6 +332,14 @@ One span per Anthropic API call. The `bd.ai.operation` attribute distinguishes t
 | `bd.db.lock_wait_ms` | Histogram | — | 🔲 Registered, not recorded |
 | `bd.db.circuit_trips` | Counter | — | ✅ Implemented |
 | `bd.db.circuit_rejected` | Counter | — | ✅ Implemented |
+| `bd.db.serialization_errors` | Counter | — | ✅ Implemented |
+| `bd.db.conn_acquire_ms` | Histogram (ms) | — | ✅ Implemented |
+| `bd.db.pool_wait_count` | Counter | — | ✅ Implemented |
+| `bd.db.pool_wait_ms` | Histogram (ms) | — | ✅ Implemented |
+| `bd.db.pool_open` | Observable gauge | — | ✅ Implemented |
+| `bd.db.pool_in_use` | Observable gauge | — | ✅ Implemented |
+| `bd.db.pool_idle` | Observable gauge | — | ✅ Implemented |
+| `bd.db.pool_max_open` | Observable gauge | — | ✅ Implemented |
 | `bd.ai.input_tokens` | Counter | `bd.ai.model` | ✅ Implemented (compact only) |
 | `bd.ai.output_tokens` | Counter | `bd.ai.model` | ✅ Implemented (compact only) |
 | `bd.ai.request.duration` | Histogram (ms) | `bd.ai.model` | ✅ Implemented (compact only) |
@@ -340,7 +365,8 @@ Key variables: `BD_OTEL_METRICS_URL`, `BD_OTEL_LOGS_URL`, `BD_OTEL_STDOUT`.
 
 ## Appendix: Source Reference Audit
 
-Audited against **`main` @ `371df32b`**. All line numbers below refer to that commit.
+Audited against **`dc/patches-v1.2.2` @ `f1ffdde3`**. Source references below
+name the registering or emitting function rather than brittle line numbers.
 
 Every metric name, span name, and attribute listed in this document is backed by a specific source location. This table exists to prevent documentation drift and to make re-verification straightforward after code changes.
 
@@ -356,6 +382,14 @@ Every metric name, span name, and attribute listed in this document is backed by
 | `bd.db.lock_wait_ms` | Histogram | `store.go:306` — registered; `.Record()` not called anywhere |
 | `bd.db.circuit_trips` | Counter | `store.go:310` — `m.Int64Counter("bd.db.circuit_trips")` |
 | `bd.db.circuit_rejected` | Counter | `store.go:314` — `m.Int64Counter("bd.db.circuit_rejected")` |
+| `bd.db.serialization_errors` | Counter | `store.go` — `m.Int64Counter("bd.db.serialization_errors")` |
+| `bd.db.conn_acquire_ms` | Histogram | `store.go` — `m.Float64Histogram("bd.db.conn_acquire_ms")` |
+| `bd.db.pool_wait_count` | Counter | `store.go` — `m.Int64Counter("bd.db.pool_wait_count")` |
+| `bd.db.pool_wait_ms` | Histogram | `store.go` — `m.Float64Histogram("bd.db.pool_wait_ms")` |
+| `bd.db.pool_open` | Observable gauge | `store.go` — pool stats callback |
+| `bd.db.pool_in_use` | Observable gauge | `store.go` — pool stats callback |
+| `bd.db.pool_idle` | Observable gauge | `store.go` — pool stats callback |
+| `bd.db.pool_max_open` | Observable gauge | `store.go` — pool stats callback |
 | `bd.ai.input_tokens` | Counter | `haiku.go:110` — `m.Int64Counter("bd.ai.input_tokens")` |
 | `bd.ai.output_tokens` | Counter | `haiku.go:114` — `m.Int64Counter("bd.ai.output_tokens")` |
 | `bd.ai.request.duration` | Histogram | `haiku.go:118` — `m.Float64Histogram("bd.ai.request.duration")` |
@@ -374,6 +408,7 @@ Every metric name, span name, and attribute listed in this document is backed by
 | `dolt.push` | `dolt.branch` | `store.go:1231, 1266` |
 | `dolt.pull` | `dolt.branch` | `store.go:1295` |
 | `dolt.merge` | `dolt.merge_branch` | `store.go:1389` |
+| `dolt.merge_with_strategy` | `dolt.merge_branch`, `dolt.merge_strategy` | `store.go` — `MergeWithStrategy` |
 | `dolt.branch` | `dolt.branch` | `store.go:1357` |
 | `dolt.checkout` | `dolt.branch` | `store.go:1372` |
 | `hook.exec` | `hook.event`, `hook.path`, `bd.issue_id` | `hooks_unix.go:31-36` |
