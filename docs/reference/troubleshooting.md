@@ -328,7 +328,8 @@ tracking the same work twice.
 persisting across repeated invocations.
 
 **Cause:** The circuit breaker tripped after repeated connection failures.
-Its state lives in a file under `/tmp/beads-circuit/` (named
+Its state lives in the operating system's user cache directory under
+`beads/circuit/` (for example, `$XDG_CACHE_HOME/beads/circuit/` on Linux), named
 `beads-dolt-circuit-<host>-<port>[-<db>].json`, keyed on host:port) and is
 shared across all `bd` processes. Once tripped, all commands to that host:port
 are rejected until a successful probe resets it.
@@ -341,7 +342,7 @@ accepting connections on the expected port.
 
 ```bash
 # Check circuit breaker state
-cat /tmp/beads-circuit/beads-dolt-circuit-*.json
+find "${XDG_CACHE_HOME:-$HOME/.cache}/beads/circuit" -name 'beads-dolt-circuit-*.json' -print
 
 # Check if the Dolt server is actually listening
 lsof -i :<port>
@@ -353,7 +354,7 @@ cat .beads/metadata.json | grep port
 **Fix:**
 
 ```bash
-rm /tmp/beads-circuit/beads-dolt-circuit-*.json
+bd doctor --fix
 bd dolt stop
 bd dolt start
 bd list
