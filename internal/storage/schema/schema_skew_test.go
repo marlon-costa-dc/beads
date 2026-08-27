@@ -251,6 +251,39 @@ func TestSchemaSkewError_UserMessage_ExactCopy(t *testing.T) {
 	}
 }
 
+func TestSchemaSkewError_UserMessage_PreV62Window_UsesGenericUpgradeAdvice(t *testing.T) {
+	e := &SchemaSkewError{DBVersion: 65, BinaryVersion: 53}
+	got := e.UserMessage()
+	if !strings.Contains(got, "Your bd binary is stale") {
+		t.Errorf("UserMessage() must use generic upgrade advice:\n%s", got)
+	}
+	if strings.Contains(got, "RECOVERY-1.2.1.md") {
+		t.Errorf("UserMessage() must not direct schema62 users to the retired v53 rollback:\n%s", got)
+	}
+}
+
+// The schema62 line no longer supports rolling a database cursor back to v53.
+// Every forward-skew combination receives the same fail-closed upgrade advice.
+func TestSchemaSkewError_UserMessage_NoRetiredV53RollbackWindow(t *testing.T) {
+	cases := []struct {
+		name       string
+		db, binary int
+	}{
+		{"former window floor", 54, 53},
+		{"former window ceiling", 65, 53},
+		{"past former ceiling", 66, 53},
+		{"future binary", 70, 66},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &SchemaSkewError{DBVersion: tc.db, BinaryVersion: tc.binary}
+			if strings.Contains(e.UserMessage(), "RECOVERY-1.2.1.md") {
+				t.Errorf("UserMessage() contains retired v53 rollback advice:\n%s", e.UserMessage())
+			}
+		})
+	}
+}
+
 func TestSchemaSkewError_EscapeHint_ExactCopy(t *testing.T) {
 	e := &SchemaSkewError{DBVersion: 45, BinaryVersion: 42}
 	want := "BD_IGNORE_SCHEMA_SKEW=1 bd <command>  or  bd --ignore-schema-skew <command>"

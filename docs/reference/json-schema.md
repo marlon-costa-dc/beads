@@ -3,7 +3,7 @@ title: JSON Output Schema Contract
 description: The stable JSON output contract for bd --json commands, covering the schema_version envelope, per-command fields, and consumer guidelines.
 ---
 
-Last reviewed: 2026-05-08
+Last reviewed: 2026-08-26
 
 Freshness source: `cmd/bd/output.go`, `cmd/bd/errors.go`, and
 `cmd/bd/protocol/json_contract_test.go`.
@@ -36,11 +36,11 @@ no field injection. Works identically for objects, arrays, and maps.
 ```bash
 # Before (legacy):
 bd list --json | jq '.[0].id'
-bd show beads-abc --json | jq '.title'
+bd show beads-abc --json | jq '.[0].title'
 
 # After (envelope):
 bd list --json | jq '.data[0].id'
-bd show beads-abc --json | jq '.data.title'
+bd show beads-abc --json | jq '.data[0].title'
 
 # Version check:
 bd show beads-abc --json | jq '.schema_version'
@@ -95,7 +95,7 @@ Arrays are wrapped the same way:
 
 ### Legacy mode (default, until v2.0)
 
-### Object commands (show, create, close, update, etc.)
+### Object commands (single-result create and other object-shaped results)
 
 Commands that return a single issue or result emit a JSON object with
 `schema_version` as a top-level field alongside the data:
@@ -169,8 +169,9 @@ Each item includes all standard issue fields plus:
 
 ### bd show --json
 
-Returns a single object (not wrapped in `items`). Same required fields as list
-items, plus:
+Returns a raw array containing one issue in legacy mode. In envelope mode that
+same array is available under `data`. The issue has the same required fields as
+list items, plus:
 - `description` (string)
 - `acceptance_criteria` (string)
 - `dependencies` (object[]): Full dependency records

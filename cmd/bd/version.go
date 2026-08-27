@@ -16,7 +16,7 @@ import (
 
 var (
 	// Version is the current version of bd (overridden by ldflags at build time)
-	Version = "1.1.2-dc2"
+	Version = "1.2.2-dc3"
 	// Build can be set via ldflags at compile time
 	Build = "dev"
 	// Commit and branch the git revision the binary was built from (optional ldflag)
@@ -156,6 +156,14 @@ func findDuplicateBinaries() []string {
 			continue
 		}
 		if info.IsDir() {
+			continue
+		}
+		// Mise shims are symlinks named after the requested tool whose target is
+		// the mise executable. When mise dispatches bd it prepends the selected
+		// install directory to PATH but intentionally leaves its shim directory
+		// there too. Counting that dispatcher as a second bd produces a false
+		// duplicate warning on every correctly managed installation.
+		if filepath.Base(resolved) == "mise" && resolved != candidate {
 			continue
 		}
 		if !seen[resolved] {
