@@ -275,7 +275,14 @@
           "recovery/circular-dependencies",
           "recovery/sync-failures",
           "recovery/history-squash",
-          "recovery/uninstalling"
+          "recovery/uninstalling",
+          "RECOVERY-1.2.1.md"
+        ]
+      },
+      {
+        "group": "Releases",
+        "pages": [
+          "releases/v1.2.2-test-plan.md"
         ]
       },
       {
