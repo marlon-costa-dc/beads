@@ -59,11 +59,11 @@ jobs:
           key: smoke-binaries-${{ matrix.prev_version }}-${{ runner.os }}
 
       - name: Build candidate binary
-        run: go build -tags gms_pure_go -o /tmp/bd-candidate ./cmd/bd
+        run: go build -tags gms_pure_go -o "$RUNNER_TEMP/bd-candidate" ./cmd/bd
 
       - name: Run upgrade smoke tests
         env:
-          CANDIDATE_BIN: /tmp/bd-candidate
+          CANDIDATE_BIN: ${{ runner.temp }}/bd-candidate
         run: ./scripts/upgrade-smoke-test.sh ${{ matrix.prev_version }}
 
   versions:
@@ -79,10 +79,13 @@ jobs:
           # Tag push and manual dispatch test more versions; PRs test fewer for speed
           VERSION_COUNT: ${{ (github.event_name == 'push' && '30') || (github.event_name == 'workflow_dispatch' && inputs.version_count) || '5' }}
         run: |
+          # v1.2.0 and v1.2.1 were retracted after advancing databases to the
+          # abandoned schema v65. v1.2.2 is the documented recovery release,
+          # not a direct binary-upgrade path from those two accidental builds.
           VERSIONS=$(gh release list \
             --repo gastownhall/beads \
             --limit "$VERSION_COUNT" \
             --json tagName \
-            --jq '[.[].tagName]')
+            --jq '[.[].tagName | select(. != "v1.2.0" and . != "v1.2.1")]')
           echo "matrix=$VERSIONS" >> "$GITHUB_OUTPUT"
           echo "Testing versions: $VERSIONS"

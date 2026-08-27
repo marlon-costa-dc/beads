@@ -30,6 +30,9 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# shellcheck source=../.buildflags
+source "$ROOT/.buildflags"
 WORK="$(mktemp -d /tmp/bd-122-verify.XXXXXX)"
 export HOME="$WORK/home"   # isolate from user config/daemons
 mkdir -p "$HOME"
