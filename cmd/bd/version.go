@@ -158,6 +158,14 @@ func findDuplicateBinaries() []string {
 		if info.IsDir() {
 			continue
 		}
+		// Mise shims are symlinks named after the requested tool whose target is
+		// the mise executable. When mise dispatches bd it prepends the selected
+		// install directory to PATH but intentionally leaves its shim directory
+		// there too. Counting that dispatcher as a second bd produces a false
+		// duplicate warning on every correctly managed installation.
+		if filepath.Base(resolved) == "mise" && resolved != candidate {
+			continue
+		}
 		if !seen[resolved] {
 			seen[resolved] = true
 			paths = append(paths, candidate)

@@ -6,9 +6,36 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestFindDuplicateBinariesIgnoresMiseShim(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink setup is not portable to Windows")
+	}
+
+	realBinDir := t.TempDir()
+	shimDir := t.TempDir()
+	realBD := filepath.Join(realBinDir, "bd")
+	mise := filepath.Join(shimDir, "mise")
+	for _, path := range []string{realBD, mise} {
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(mise, filepath.Join(shimDir, "bd")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", strings.Join([]string{realBinDir, shimDir}, string(os.PathListSeparator)))
+
+	got := findDuplicateBinaries()
+	if len(got) != 1 || got[0] != realBD {
+		t.Fatalf("findDuplicateBinaries() = %v, want only %s", got, realBD)
+	}
+}
 
 func TestVersionCommand(t *testing.T) {
 	// Save original stdout
