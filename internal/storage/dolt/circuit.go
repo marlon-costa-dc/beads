@@ -30,7 +30,7 @@ const (
 	circuitFailureWindow = 60 * time.Second
 
 	// circuitCooldown is how long to stay open before allowing a half-open probe.
-	// Keep this short — planned restarts (e.g. gt dolt sync) only take 2-3s.
+	// Keep this short — planned restarts (e.g. gc dolt sync) only take 2-3s.
 	circuitCooldown = 5 * time.Second
 
 	// circuitStaleTTL is the maximum age of an open circuit breaker state file
