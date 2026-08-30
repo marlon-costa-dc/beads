@@ -18,15 +18,15 @@ by delegating to the configured mail provider.
 
 Configuration (checked in order):
   1. BEADS_MAIL_DELEGATE or BD_MAIL_DELEGATE environment variable
-  2. 'mail.delegate' config setting (bd config set mail.delegate "gt mail")
+  2. 'mail.delegate' config setting (bd config set mail.delegate "gc mail")
 
 Examples:
   # Configure delegation (one-time setup)
-  export BEADS_MAIL_DELEGATE="gt mail"
+  export BEADS_MAIL_DELEGATE="gc mail"
   # or
-  bd config set mail.delegate "gt mail"
+  bd config set mail.delegate "gc mail"
 
-  # Then use bd mail as if it were gt mail
+  # Then use bd mail as if it were gc mail
   bd mail inbox                    # Lists inbox
   bd mail send mayor/ -s "Hi"      # Sends mail
   bd mail read msg-123             # Reads a message
