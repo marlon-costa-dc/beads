@@ -7,35 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.2.3] - 2026-08-30
-
-Bug-fix release on the 1.2.2 line. No schema change: this release stays on
-schema v53, so it opens the same databases v1.2.2 does.
-
-### Fixed
-
-- `bd list` no longer loops forever on hierarchy cycles. `buildIssueTreeWithDeps`
-  promoted *any* dependency whose target was an epic into a parent-child tree
-  edge, which swept in `supersedes` — a version-chain link that is routinely
-  mutual between two epics (A supersedes B while B supersedes A). That made the
-  hierarchy cyclic, and `printPrettyTree` recursed with no visited set and no
-  depth cap, so it walked the cycle until the disk filled: 17.7 GB of output on
-  a 1853-issue database before the OOM killer stopped it. Only explicit
-  parent-child edges (plus the dotted-id fallback) now build hierarchy.
-- The `bd list` tree renderer now carries a path-scoped visited set and a depth
-  ceiling, mirroring the guards `renderTree` already enforced in `bd dep tree`.
-  A node closing a cycle renders once, marked `(cycle)`, instead of recursing.
-  The visited set is scoped to the ancestor path, so a node reachable through
-  two different parents still renders under each.
-
-### Notes
-
-- `bd dep cycles` reports no cycles on this shape: it validates the blocking
-  graph, while the tree renderer promoted `supersedes` and epic-targeted edges
-  into hierarchy. The two views disagreed and only one was guarded.
-- `bd list --flat` was never affected and remains the safe path on very large
-  graphs.
-
 ## [1.2.2] - 2026-08-15
 
 Recovery release. v1.2.0 and v1.2.1 were published by accident on
