@@ -597,6 +597,7 @@ func FindBeadsDirFrom(startDir string) string {
 	}
 
 	startDir = utils.CanonicalizePath(startDir)
+	testCeiling := utils.TestDiscoveryCeiling(startDir)
 	repoRoot := ""
 	if out, err := gitOutput(startDir, "rev-parse", "--show-toplevel"); err == nil {
 		repoRoot = utils.CanonicalizePath(out)
@@ -650,7 +651,7 @@ func FindBeadsDirFrom(startDir string) string {
 		}
 
 		parent := filepath.Dir(dir)
-		if parent == dir {
+		if parent == dir || (testCeiling != "" && dir == testCeiling) {
 			break
 		}
 		dir = parent
@@ -815,6 +816,7 @@ func FindBeadsDir() string {
 	// the worktree root — finding an inherited .beads/ directory there and
 	// short-circuiting the worktree-fallback logic in step 3.
 	cwdCanonical := utils.CanonicalizePath(cwd)
+	testCeiling := utils.TestDiscoveryCeiling(cwdCanonical)
 	walkBoundaryCanonical := ""
 	if walkBoundary != "" {
 		walkBoundaryCanonical = utils.CanonicalizePath(walkBoundary)
@@ -837,7 +839,7 @@ func FindBeadsDir() string {
 		}
 
 		parent := filepath.Dir(dir)
-		if parent == dir {
+		if parent == dir || (testCeiling != "" && dir == testCeiling) {
 			break
 		}
 		dir = parent
@@ -1132,6 +1134,7 @@ func findDatabaseInTree() string {
 	// /var → /private/var or case-insensitive filesystems. Matches the
 	// canonicalization strategy in FindBeadsDir.
 	dir = utils.CanonicalizePath(dir)
+	testCeiling := utils.TestDiscoveryCeiling(dir)
 
 	isWt := git.IsWorktree()
 	var jjSecondaryRoot string
@@ -1259,7 +1262,7 @@ func findDatabaseInTree() string {
 
 		// Move up one directory
 		parent := filepath.Dir(dir)
-		if parent == dir {
+		if parent == dir || (testCeiling != "" && dir == testCeiling) {
 			// Reached filesystem root
 			break
 		}
@@ -1290,6 +1293,8 @@ func FindAllDatabases() []DatabaseInfo {
 	if err != nil {
 		return databases
 	}
+	dir = utils.CanonicalizePath(dir)
+	testCeiling := utils.TestDiscoveryCeiling(dir)
 
 	// Find git root to limit the search
 	gitRoot := findGitRoot()
@@ -1346,7 +1351,7 @@ func FindAllDatabases() []DatabaseInfo {
 
 		// Move up one directory
 		parent := filepath.Dir(dir)
-		if parent == dir {
+		if parent == dir || (testCeiling != "" && dir == testCeiling) {
 			// Reached filesystem root
 			break
 		}

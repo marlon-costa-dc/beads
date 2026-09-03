@@ -14,18 +14,16 @@ beads_test_env_enter() {
         return 0
     fi
 
-    local root
-    root="$(mktemp -d "${TMPDIR:-/tmp}/beads-test-env-XXXXXX")"
+    local repo_root cache_home tmp_base root
+    repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+    cache_home="${XDG_CACHE_HOME:-$HOME/.cache}"
+    tmp_base="${BEADS_TEST_TMP_BASE:-$cache_home/beads/test-tmp}"
+    mkdir -p "$tmp_base"
+    root="$(mktemp -d "$tmp_base/beads-test-env-XXXXXX")"
     export BEADS_TEST_ENV_ROOT="$root"
     export BEADS_TEST_ENV_ACTIVE=1
+    export BEADS_TEST_DISCOVERY_CEILING="$root"
 
-    if [[ -z "${GOCACHE:-}" ]]; then
-        local go_cache
-        go_cache="$(go env GOCACHE 2>/dev/null || true)"
-        if [[ -n "$go_cache" ]]; then
-            export GOCACHE="$go_cache"
-        fi
-    fi
     if [[ -z "${GOMODCACHE:-}" ]]; then
         local go_mod_cache
         go_mod_cache="$(go env GOMODCACHE 2>/dev/null || true)"
@@ -34,15 +32,29 @@ beads_test_env_enter() {
         fi
     fi
 
-    mkdir -p "$root/home" "$root/xdg-config" "$root/dolt-root"
+    local go_cache
+    go_cache="${BEADS_TEST_GOCACHE:-$cache_home/beads/go-build}"
+    mkdir -p "$root/home" "$root/xdg-config" "$root/dolt-root" "$root/tmp" "$root/go-tmp" "$go_cache"
+    : >"$root/.beads-test-discovery-ceiling"
     : >"$root/gitconfig"
 
     export HOME="$root/home"
     export USERPROFILE="$root/home"
     export XDG_CONFIG_HOME="$root/xdg-config"
     export DOLT_ROOT_PATH="$root/dolt-root"
+    export TMPDIR="$root/tmp"
+    export GOTMPDIR="$root/go-tmp"
+    # Keep the Go build cache persistent and separate from the disposable test
+    # root. A private race-enabled cache is several GiB per invocation and can
+    # exhaust a host before the EXIT trap has a chance to reclaim it. The Go
+    # cache itself is content-addressed and concurrency-safe; callers that need
+    # a one-shot cache can override BEADS_TEST_GOCACHE explicitly.
+    export GOCACHE="$go_cache"
     export GIT_CONFIG_NOSYSTEM=1
     export GIT_CONFIG_GLOBAL="$root/gitconfig"
+    # Keep package tests isolated from the invoking checkout's repository and
+    # user configuration. Focused tests can explicitly clear this variable
+    # when repository-config behavior is the subject under test.
     export BEADS_TEST_IGNORE_REPO_CONFIG=1
     if [[ "${BEADS_TEST_ENV_RUN_DOLT:-0}" != "1" ]]; then
         beads_test_env_add_skip "dolt"
@@ -94,5 +106,6 @@ beads_test_env_cleanup() {
     if [[ -n "${BEADS_TEST_ENV_ROOT:-}" ]]; then
         rm -rf "$BEADS_TEST_ENV_ROOT"
         unset BEADS_TEST_ENV_ROOT
+        unset BEADS_TEST_DISCOVERY_CEILING
     fi
 }
