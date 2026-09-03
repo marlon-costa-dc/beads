@@ -97,34 +97,8 @@ func (e *SchemaSkewError) Error() string {
 		e.DBVersion, e.BinaryVersion, delta, unit)
 }
 
-// The accidental v1.2.0/v1.2.1 release shipped migrations 54..65 untested and
-// auto-migrated local databases on first use. v1.2.2 re-released the tested
-// 1.1 line (schema v53), so a v53 binary seeing a DB in (53, 65] is almost
-// certainly looking at a database that accidental release migrated. Steer
-// those users to the recovery runbook instead of the generic "install the
-// latest release" advice, which would send them in a circle (the latest
-// release IS this binary).
-const (
-	accidental12SchemaFloor   = 53 // last schema version of the tested 1.1 line
-	accidental12SchemaCeiling = 65 // highest migration shipped by v1.2.0/v1.2.1
-)
-
 // UserMessage returns the full multi-line error block for terminal output.
 func (e *SchemaSkewError) UserMessage() string {
-	if e.BinaryVersion == accidental12SchemaFloor && e.DBVersion <= accidental12SchemaCeiling {
-		return e.Error() + "\n" +
-			"\n" +
-			"  This database was migrated by the accidental, untested v1.2.0/v1.2.1\n" +
-			"  release. This binary is the supported release; do not reinstall v1.2.1.\n" +
-			"\n" +
-			"  Recovery guide (rolls the schema cursor back to v53, ~2 minutes):\n" +
-			"    https://github.com/gastownhall/beads/blob/v1.2.2/docs/RECOVERY-1.2.1.md\n" +
-			"\n" +
-			"  To keep working right now, before recovering (verified safe for this\n" +
-			"  schema range; audit-event versioning is paused until you recover):\n" +
-			"    BD_IGNORE_SCHEMA_SKEW=1 bd <command>\n" +
-			"    bd --ignore-schema-skew <command>\n"
-	}
 	return e.Error() + "\n" +
 		"\n" +
 		"  Your bd binary is stale. Queries for dropped or renamed columns will fail\n" +
@@ -651,43 +625,13 @@ func MigrateUp(ctx context.Context, db DBConn) (int, error) {
 	// pre-existing user writes: dropping them from dirtyBefore exempts them
 	// from the changed-signature guard (the resumed rekey is about to change
 	// them) and lets stageSchemaTables commit them with the rest of the pass.
-<<<<<<< HEAD
-	//
-	// A table skipped for #11131 encoding drift (#4380) needs the same
-	// exemption on the pass that retries it, and needs it more: the
-	// changed-signature guard below reads dirty tables through dolt_diff, which
-	// decodes exactly the cells that panic — so leaving a drifted table in
-	// dirtyBefore would fail the pass on the read, re-creating the unopenable
-	// database this exemption path exists to rescue. Only the recorded tables
-	// are exempted there, since only those will be touched.
-	auxRekeyOwed, err := readAuxRekeyState(ctx, db)
-	if err != nil {
-		return 0, fmt.Errorf("reading aux rekey state: %w", err)
-	}
-	if auxRekeyOwed.resume {
-=======
 	if resuming, err := anyAuxRekeyResumePending(ctx, db); err != nil {
 		return 0, fmt.Errorf("reading aux rekey sentinel: %w", err)
 	} else if resuming {
->>>>>>> origin/main
 		for _, t := range auxRekeyTables {
 			delete(dirtyBefore, t.name)
 		}
 	}
-<<<<<<< HEAD
-	for _, name := range auxRekeyOwed.drifted {
-		delete(dirtyBefore, name)
-	}
-	if recoverable, err := failed0053DirtyTablesAreRecoverable(ctx, db, dirtyBefore); err != nil {
-		return 0, fmt.Errorf("checking failed v53 migration recovery: %w", err)
-	} else if recoverable {
-		log.Printf("schema migration recovering known failed v53 dirty tables: %s", strings.Join(sortedDirtyTableNames(dirtyBefore), ", "))
-		for table := range dirtyBefore {
-			delete(dirtyBefore, table)
-		}
-	}
-=======
->>>>>>> origin/main
 	touchedDirtyTables, err := mainSource.pendingMigrationDirtyTables(ctx, db, dirtyBefore)
 	if err != nil {
 		return 0, fmt.Errorf("checking dirty tables against pending migrations: %w", err)

@@ -336,20 +336,7 @@ ifeq ($(OS),Windows_NT)
 	@cp "$(BUILD_DIR)/bd.exe" "$(INSTALL_DIR)/bd.exe"
 	@echo "Installed bd.exe to $(INSTALL_DIR)/bd.exe"
 else
-<<<<<<< HEAD
-	@set -eu; \
-		tmp="$(INSTALL_DIR)/.bd.install.$$$$"; \
-		trap 'rm -f "$$tmp"' EXIT HUP INT TERM; \
-		if [ "$$(uname -s)" = Linux ]; then \
-			cp --reflink=auto $(BUILD_DIR)/bd "$$tmp"; \
-		else \
-			cp $(BUILD_DIR)/bd "$$tmp"; \
-		fi; \
-		mv -f "$$tmp" $(INSTALL_DIR)/bd; \
-		trap - EXIT HUP INT TERM
-=======
 	@cp "$(BUILD_DIR)/bd" "$(INSTALL_DIR)/.bd.install.tmp.$$$$" && mv -f "$(INSTALL_DIR)/.bd.install.tmp.$$$$" "$(INSTALL_DIR)/bd"
->>>>>>> origin/main
 	@echo "Installed bd to $(INSTALL_DIR)/bd"
 	@ln -sfn bd "$(INSTALL_DIR)/.beads.install.tmp.$$$$" && mv -f "$(INSTALL_DIR)/.beads.install.tmp.$$$$" "$(INSTALL_DIR)/beads"
 	@echo "Created 'beads' alias -> bd"

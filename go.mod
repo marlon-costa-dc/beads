@@ -282,11 +282,8 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
 
-<<<<<<< HEAD
-=======
 tool github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 
->>>>>>> origin/main
 // v1.2.0 and v1.2.1 were published accidentally without release testing and
 // auto-migrated local databases to an unsupported schema (v54..v65); v1.1.1
 // was a burned tag that never shipped. v1.2.2 re-releases the tested 1.1

@@ -2495,11 +2495,7 @@ func openServerConnection(ctx context.Context, cfg *Config) (*sql.DB, string, se
 			if !strings.Contains(errLower, "database exists") && !strings.Contains(errLower, "1007") {
 				// Check for connection refused - server likely not running
 				if strings.Contains(errLower, "connection refused") || strings.Contains(errLower, "connect: connection refused") {
-<<<<<<< HEAD
-					return nil, "", fmt.Errorf("failed to connect to Dolt server at %s:%d: %w\n\nThe Dolt server may not be running. Try:\n  bd dolt start    # Start a local server\n  gc dolt start    # If using an orchestrator",
-=======
 					return nil, "", serverConnFacts{}, fmt.Errorf("failed to connect to Dolt server at %s:%d: %w\n\nThe Dolt server may not be running. Try:\n  bd dolt start    # Start a local server\n  gt dolt start    # If using an orchestrator",
->>>>>>> origin/main
 						cfg.ServerHost, cfg.ServerPort, err)
 				}
 				return nil, "", serverConnFacts{}, fmt.Errorf("failed to create database: %w", err)
@@ -2747,38 +2743,6 @@ func (s *DoltStore) ApplySchemaMigrations(ctx context.Context) (int, error) {
 	}
 	defer migDB.Close()
 	return initSchemaOnDBWithRetry(ctx, migDB)
-}
-
-func (s *DoltStore) InspectSchema(ctx context.Context) (storage.SchemaInspection, error) {
-	db, err := s.openMigrationDB()
-	if err != nil {
-		return storage.SchemaInspection{}, err
-	}
-	defer db.Close()
-	return inspectSchema(ctx, db)
-}
-
-func inspectSchema(ctx context.Context, db schema.DBConn) (storage.SchemaInspection, error) {
-	current, err := schema.CurrentVersion(ctx, db)
-	if err != nil {
-		return storage.SchemaInspection{}, err
-	}
-	pending, err := schema.PendingVersions(ctx, db)
-	if err != nil {
-		return storage.SchemaInspection{}, err
-	}
-	ignored, err := schema.CurrentIgnoredVersion(ctx, db)
-	if err != nil {
-		return storage.SchemaInspection{}, err
-	}
-	pendingIgnored, err := schema.PendingIgnoredVersions(ctx, db)
-	if err != nil {
-		return storage.SchemaInspection{}, err
-	}
-	return storage.SchemaInspection{
-		CurrentVersion: current, LatestVersion: schema.LatestVersion(), PendingVersions: pending,
-		CurrentIgnoredVersion: ignored, LatestIgnoredVersion: schema.LatestIgnoredVersion(), PendingIgnoredVersions: pendingIgnored,
-	}, nil
 }
 
 // openMigrationDB opens a one-off connection pool for schema migrations with no

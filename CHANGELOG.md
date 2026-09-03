@@ -7,56 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-<<<<<<< HEAD
-## [1.2.2-fd1] - 2026-08-30
-
-Fork bug-fix build on top of the stable v1.2.2 release. Same code as v1.2.2
-plus the `bd list` cycle guard below.
-
-No schema change: max migration stays 0053, identical to v1.2.2, so this build
-opens the same databases without any migration.
-
-### Fixed
-
-- `bd list` no longer loops forever on hierarchy cycles. `buildIssueTreeWithDeps`
-  promoted *any* dependency whose target was an epic into a parent-child tree
-  edge, which swept in `supersedes` — a version-chain link that is routinely
-  mutual between two epics (A supersedes B while B supersedes A). That made the
-  hierarchy cyclic, and `printPrettyTree` recursed with no visited set and no
-  depth cap, so it walked the cycle until the disk filled: 17.7 GB of output on
-  a 1853-issue database before the OOM killer stopped it. Only explicit
-  parent-child edges (plus the dotted-id fallback) now build hierarchy.
-- The `bd list` tree renderer now carries a path-scoped visited set and a depth
-  ceiling, mirroring the guards `renderTree` already enforced in `bd dep tree`.
-  A node closing a cycle renders once, marked `(cycle)`, instead of recursing.
-  The visited set is scoped to the ancestor path, so a node reachable through
-  two different parents still renders under each.
-
-### Notes
-
-- `bd dep cycles` reports no cycles on this shape: it validates the blocking
-  graph, while the tree renderer promoted `supersedes` and epic-targeted edges
-  into hierarchy. The two views disagreed and only one was guarded.
-- `bd list --flat` was never affected and remains the safe path on very large
-  graphs.
-
-## [1.2.2] - 2026-08-15
-
-Recovery release. v1.2.0 and v1.2.1 were published by accident on
-2026-08-11 without release testing (v1.2.0's tag burned pre-publish; only
-v1.2.1 reached users). This release supersedes them by re-releasing the
-**tested 1.1 line**: it is the v1.1.2 code under a higher version number,
-so every install channel (Homebrew, npm, the install script,
-`go install ...@latest`) moves forward onto tested code. The 1.2.x-only
-features (work leases, events journal, `bd sync`, the `bd serve` HTTP API,
-provenance events) are **not** in this release; they will return in a
-properly tested future release.
-
-**If v1.2.1 migrated your database** (running any command once was enough),
-this binary stops with `schema version mismatch: database is at v65, binary
-knows up to v53`. See [docs/RECOVERY-1.2.1.md](docs/RECOVERY-1.2.1.md) for
-the two-minute fix (roll the schema cursor back to v53) and a verified
-=======
 ### Added
 
 - **The events journal records WHO performed each mutation.** `bd_events_journal`
@@ -477,20 +427,10 @@ knows up to v53`. See the recovery guide
 ([site](https://beads.gascity.com/recovery/accidental-1-2-1-release),
 [repo copy at the tag](https://github.com/gastownhall/beads/blob/v1.2.2/docs/RECOVERY-1.2.1.md))
 for the two-minute fix (roll the schema cursor back to v53) and a verified
->>>>>>> origin/main
 stopgap (`BD_IGNORE_SCHEMA_SKEW=1`).
 
 ### Changed
 
-<<<<<<< HEAD
-- **The forward-skew error now recognizes the accidental-release window.**
-  A v53 binary opening a database at schema v54–v65 points at the recovery
-  guide instead of advising "install the latest release" (which would loop
-  back to this binary).
-- **`go.mod` retracts v1.2.1, v1.2.0, and v1.1.1** so
-  `go install github.com/steveyegge/beads/cmd/bd@latest` resolves to this
-  release instead of the accidental one.
-=======
 - **The forward-skew error recognizes the accidental-release window** (on
   the release branch): a v53 binary opening a database at schema v54–v65
   points at the recovery guide instead of advising "install the latest
@@ -2782,7 +2722,6 @@ never reused, per the v1.1.1 precedent.)
   The single-issue path now calls `ReconcileChildCounters` too, and its
   changed tables are merged into the result so the reconcile actually gets
   staged for commit.
->>>>>>> origin/main
 
 ## [1.1.2] - 2026-07-26
 

@@ -1,10 +1,6 @@
 {
   "name": "beads",
-<<<<<<< HEAD
-  "version": "1.2.2-fd1",
-=======
   "version": "1.2.2",
->>>>>>> origin/main
   "description": "AI-supervised issue tracking for coding workflows with agent skills.",
   "author": {
     "name": "Steve Yegge",

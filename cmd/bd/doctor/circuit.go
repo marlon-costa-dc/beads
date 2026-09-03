@@ -6,21 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-
-	"github.com/steveyegge/beads/internal/storage/dolt"
 )
 
 // CheckCircuitBreaker checks for stale circuit breaker state files that may
 // block all bd operations. Returns a fixable DoctorCheck if stale files exist.
 func CheckCircuitBreaker() DoctorCheck {
-<<<<<<< HEAD
-	dir := dolt.CircuitBreakerDir()
-=======
 	// Derived from os.TempDir() to match where the storage layer now writes
 	// breaker files; hardcoding "/tmp" checked the wrong place on Windows,
 	// where files land under %TEMP% not C:\tmp (GH#4636).
 	dir := filepath.Join(os.TempDir(), "beads-circuit")
->>>>>>> origin/main
 	pattern := filepath.Join(dir, "beads-dolt-circuit-*.json")
 	matches, err := filepath.Glob(pattern)
 	if err != nil || len(matches) == 0 {

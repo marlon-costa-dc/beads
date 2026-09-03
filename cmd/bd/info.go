@@ -221,23 +221,6 @@ type VersionChange struct {
 // versionChanges contains agent-actionable changes for recent versions
 var versionChanges = []VersionChange{
 	{
-<<<<<<< HEAD
-		Version: "1.2.2-fd1",
-		Date:    "2026-08-30",
-		Changes: []string{
-			"FIX: bd list no longer loops forever on hierarchy cycles. A `supersedes` edge between two epics was promoted to a parent-child tree edge; when mutual, the renderer walked the cycle until the disk filled (17.7GB of output on a 1853-issue database). Only explicit parent-child edges now build hierarchy.",
-			"FIX: the bd list tree renderer carries a path-scoped visited set and a depth ceiling, mirroring the guards bd dep tree already had. Nodes closing a cycle render once, marked (cycle), instead of recursing forever.",
-			"NOTE: bd dep cycles stays silent on this shape because it validates the blocking graph, not the rendered hierarchy; --flat was never affected.",
-		},
-	},
-	{
-		Version: "1.2.2",
-		Date:    "2026-08-15",
-		Changes: []string{
-			"RELEASE: v1.2.2 re-releases the tested 1.1 line (identical code to v1.1.2) to supersede the accidental, untested v1.2.0/v1.2.1; 1.2.x-only features (leases, events journal, bd sync, serve HTTP API, provenance) are not included.",
-			"RECOVERY: if v1.2.1 already migrated a database to schema v65, this binary refuses with a schema version mismatch; see docs/RECOVERY-1.2.1.md — recommended fix is rolling the schema_migrations cursor back to v53, stopgap is BD_IGNORE_SCHEMA_SKEW=1.",
-			"GO: go.mod retracts v1.2.1/v1.2.0/v1.1.1 so 'go install ...@latest' resolves to this release.",
-=======
 		Version: "1.2.2",
 		Date:    "2026-08-15",
 		Changes: []string{
@@ -255,7 +238,6 @@ var versionChanges = []VersionChange{
 			"NEW: `--brief` on `bd list` / `bd ready --json` and the HTTP listings — omits free-form text fields (~93% smaller payloads on large stores); fields are omitted without a marker, so only the caller that passed the flag knows rows are partial.",
 			"BEHAVIOR: expired dated defers now AUTO-WAKE on ready-front reads and claims (#5386) — a lapsed `--defer` no longer hides an issue forever; stale defers surface on the next `bd ready`.",
 			"PERF: telemetry no longer costs startup time on every invocation (#5646), and the queued-events dir is bounded (7d TTL + drop-oldest caps, #5660) — a backlogged ~/.beads/eventsData self-prunes.",
->>>>>>> origin/main
 		},
 	},
 	{

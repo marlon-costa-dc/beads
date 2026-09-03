@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/steveyegge/beads/internal/types"
-	"github.com/steveyegge/beads/internal/ui"
 	"github.com/steveyegge/beads/internal/utils"
 )
 
@@ -20,24 +19,14 @@ func buildIssueTree(issues []*types.Issue) (roots []*types.Issue, childrenMap ma
 
 // buildIssueTreeWithDeps builds parent-child tree using dependency records
 // If allDeps is nil, falls back to dotted ID hierarchy (e.g., "parent.1")
-<<<<<<< HEAD
-// Only explicit parent-child dependencies create hierarchy; other edge types
-// (supersedes, tracks, relates-to, ...) express relationships that are not
-// containment and must not nest one issue under another.
-=======
 // Only parent-child dependency edges establish nesting; other edge types
 // (blocks, waits-for, discovered-from, relates-to, ...) are workflow/graph
 // links and are not rendered as hierarchy.
->>>>>>> origin/main
 func buildIssueTreeWithDeps(issues []*types.Issue, allDeps map[string][]*types.Dependency) (roots []*types.Issue, childrenMap map[string][]*types.Issue) {
 	issueMap := make(map[string]*types.Issue)
 	childrenMap = make(map[string][]*types.Issue)
 	isChild := make(map[string]bool)
 
-<<<<<<< HEAD
-	// Build issue map
-=======
->>>>>>> origin/main
 	for _, issue := range issues {
 		issueMap[issue.ID] = issue
 	}
@@ -65,43 +54,10 @@ func buildIssueTreeWithDeps(issues []*types.Issue, allDeps map[string][]*types.D
 					continue
 				}
 
-<<<<<<< HEAD
-				// relates-to is a loose graph link, not a hierarchical edge:
-				// treating it as parent-child causes incorrect nesting and, when
-				// bidirectional, marks both endpoints as children of each other
-				// — collapsing them out of the root set and silently dropping
-				// whole subtrees from `bd list`. See gastownhall/beads#3936.
-				if dep.Type == types.DepRelatesTo {
-					continue
-				}
-
-				// Only an explicit parent-child edge builds hierarchy.
-				//
-				// Previously any dependency whose target was an epic was
-				// promoted to parent-child. That swept in edges that express
-				// no containment at all — most damagingly `supersedes`, a
-				// version-chain link that is routinely mutual between two
-				// epics (A supersedes B while B supersedes A). Promoting it
-				// created a hierarchy cycle, and printPrettyTree walked it
-				// until the disk filled: on a 1853-issue graph `bd list --all`
-				// emitted 17.7 GB before the OOM killer stopped it.
-				//
-				// Note `bd dep cycles` stays silent on this shape because it
-				// validates the blocking graph, not the rendered hierarchy.
-				// The dotted-id fallback below still nests real subtasks.
-				if dep.Type == types.DepParentChild {
-					key := parentID + ":" + issueID
-					if !addedChild[key] {
-						childrenMap[parentID] = append(childrenMap[parentID], child)
-						addedChild[key] = true
-					}
-					isChild[issueID] = true
-=======
 				key := parentID + ":" + issueID
 				if !addedChild[key] {
 					childrenMap[parentID] = append(childrenMap[parentID], child)
 					addedChild[key] = true
->>>>>>> origin/main
 				}
 				isChild[issueID] = true
 			}
@@ -155,44 +111,11 @@ func compareIssuesByPriority(a, b *types.Issue) int {
 	return utils.NaturalCompareIDs(a.ID, b.ID)
 }
 
-<<<<<<< HEAD
-// maxTreeDepth caps how deep printPrettyTree will recurse. It mirrors the
-// depth ceiling renderTree already enforces in dep.go, so a malformed or
-// future edge type can never turn `bd list` into an unbounded writer again.
-// Real hierarchies are orders of magnitude shallower than this.
-const maxTreeDepth = 64
-
-// printPrettyTree recursively prints the issue tree
-// Children are sorted by priority (P0 first) for intuitive reading
-func printPrettyTree(childrenMap map[string][]*types.Issue, parentID string, prefix string) {
-	printPrettyTreeGuarded(childrenMap, parentID, prefix, map[string]bool{parentID: true}, 0)
-}
-
-// printPrettyTreeGuarded carries the two defenses renderTree (dep.go) already
-// has and this renderer lacked: a visited set covering the current ancestor
-// path, and a depth ceiling.
-//
-// visited is scoped to the path, not to the whole walk: a node legitimately
-// reachable through two different parents must still render under each, while
-// a node that reappears inside its own ancestry is a cycle and is cut.
-func printPrettyTreeGuarded(
-	childrenMap map[string][]*types.Issue,
-	parentID string,
-	prefix string,
-	visited map[string]bool,
-	depth int,
-) {
-	if depth >= maxTreeDepth {
-		return
-	}
-
-=======
 // printPrettyTree recursively prints the issue tree.
 // Children are ordered by dependency then priority when dr != nil (--deps), else
 // by priority (P0 first) for intuitive reading. When dr is set, each node's
 // dependency edges are annotated just beneath it.
 func printPrettyTree(childrenMap map[string][]*types.Issue, parentID string, prefix string, dr *depRender) {
->>>>>>> origin/main
 	children := childrenMap[parentID]
 
 	if dr != nil {
@@ -208,30 +131,14 @@ func printPrettyTree(childrenMap map[string][]*types.Issue, parentID string, pre
 		if isLast {
 			connector = "└── "
 		}
-
-		// A child already on this path closes a cycle: render it once, marked,
-		// and stop. Without this the walk never terminates.
-		if visited[child.ID] {
-			fmt.Printf("%s%s%s %s\n", prefix, connector, formatPrettyIssue(child),
-				ui.RenderMuted("(cycle)"))
-			continue
-		}
-
 		fmt.Printf("%s%s%s\n", prefix, connector, formatPrettyIssue(child))
 
 		extension := "│   "
 		if isLast {
 			extension = "    "
 		}
-<<<<<<< HEAD
-
-		visited[child.ID] = true
-		printPrettyTreeGuarded(childrenMap, child.ID, prefix+extension, visited, depth+1)
-		delete(visited, child.ID)
-=======
 		dr.annotationsFor(child.ID, prefix+extension)
 		printPrettyTree(childrenMap, child.ID, prefix+extension, dr)
->>>>>>> origin/main
 	}
 }
 

@@ -9,11 +9,7 @@
       "name": "beads",
       "source": "./plugins/beads",
       "description": "AI-supervised issue tracker for coding workflows",
-<<<<<<< HEAD
-      "version": "1.2.2-fd1"
-=======
       "version": "1.2.2"
->>>>>>> origin/main
     }
   ]
 }

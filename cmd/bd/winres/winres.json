@@ -18,20 +18,12 @@
             "Comments": "AI-supervised issue tracker for coding workflows",
             "CompanyName": "Steve Yegge",
             "FileDescription": "beads - AI-supervised issue tracker",
-<<<<<<< HEAD
-            "FileVersion": "1.2.2-fd1",
-=======
             "FileVersion": "1.2.2",
->>>>>>> origin/main
             "InternalName": "bd",
             "LegalCopyright": "Copyright (c) 2024-2026 Steve Yegge. MIT License.",
             "OriginalFilename": "bd.exe",
             "ProductName": "beads",
-<<<<<<< HEAD
-            "ProductVersion": "1.2.2-fd1"
-=======
             "ProductVersion": "1.2.2"
->>>>>>> origin/main
           }
         }
       }

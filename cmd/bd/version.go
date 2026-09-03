@@ -16,11 +16,7 @@ import (
 
 var (
 	// Version is the current version of bd (overridden by ldflags at build time)
-<<<<<<< HEAD
-	Version = "1.2.2-fd1"
-=======
 	Version = "1.2.2"
->>>>>>> origin/main
 	// Build can be set via ldflags at compile time
 	Build = "dev"
 	// Commit and branch the git revision the binary was built from (optional ldflag)

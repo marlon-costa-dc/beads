@@ -7,11 +7,7 @@
 }:
 buildGoModule {
   pname = "beads";
-<<<<<<< HEAD
-  version = "1.2.2-fd1";
-=======
   version = "1.2.2";
->>>>>>> origin/main
 
   src = self;
 
