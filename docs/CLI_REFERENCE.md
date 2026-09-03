@@ -50,10 +50,10 @@ Reference for bd Latest. Generated from `bd help --all`.
 - [bd state](#bd-state) — Query the current value of a state dimension
   - [bd state list](#bd-state-list) — List all state dimensions on an issue
 - [bd tag](#bd-tag) — Add a label to an issue
-- [bd todo](#dcdoc-todo) — Manage TODO items (convenience wrapper for task issues)
-  - [bd todo add](#dcdoc-todo-add) — Add a new TODO item
-  - [bd todo done](#dcdoc-todo-done) — Mark TODO(s) as done
-  - [bd todo list](#dcdoc-todo-list) — List TODO items
+- [bd todo](#bd-todo) — Manage TODO items (convenience wrapper for task issues)
+  - [bd todo add](#bd-todo-add) — Add a new TODO item
+  - [bd todo done](#bd-todo-done) — Mark TODO(s) as done
+  - [bd todo list](#bd-todo-list) — List TODO items
 - [bd update](#bd-update) — Update one or more issues
 
 ### Views & Reports:
@@ -256,7 +256,7 @@ Reference for bd Latest. Generated from `bd help --all`.
   - [bd gitlab sync](#bd-gitlab-sync) — Sync issues with GitLab
 - [bd help](#bd-help) — Help about any command
 - [bd init-safety](#bd-init-safety) — Explain bd init flag semantics and the destroy-token format
-- [bd mail](#bd-mail) — Delegate to mail provider (e.g., gc mail)
+- [bd mail](#bd-mail) — Delegate to mail provider (e.g., gt mail)
 - [bd metrics](#bd-metrics) — Show or change anonymous usage-metrics settings
   - [bd metrics example](#bd-metrics-example) — Show real examples of the anonymous metrics bd sends
   - [bd metrics off](#bd-metrics-off) — Turn anonymous usage metrics off
@@ -5963,15 +5963,15 @@ by delegating to the configured mail provider.
 
 Configuration (checked in order):
   1. BEADS_MAIL_DELEGATE or BD_MAIL_DELEGATE environment variable
-  2. 'mail.delegate' config setting (bd config set mail.delegate "gc mail")
+  2. 'mail.delegate' config setting (bd config set mail.delegate "gt mail")
 
 Examples:
   # Configure delegation (one-time setup)
-  export BEADS_MAIL_DELEGATE="gc mail"
+  `export BEADS_MAIL_DELEGATE="gt mail"`
   # or
-  bd config set mail.delegate "gc mail"
+  bd config set mail.delegate "gt mail"
 
-  # Then use bd mail as if it were gc mail
+  # Then use bd mail as if it were gt mail
   bd mail inbox                    # Lists inbox
   bd mail send mayor/ -s "Hi"      # Sends mail
   bd mail read msg-123             # Reads a message
