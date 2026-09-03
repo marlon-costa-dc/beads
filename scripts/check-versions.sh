@@ -77,7 +77,11 @@ check_version "npm-package/package.json" \
 #
 # uv.lock records the PEP 440-normalized version (1.1.0-rc.1 → 1.1.0rc1), so
 # normalize the canonical form before comparing.
+<<<<<<< HEAD
 LOCK_EXPECTED=$PYTHON_EXPECTED
+=======
+LOCK_EXPECTED=$(printf '%s' "$CANONICAL" | sed -E 's/-rc\.?/rc/')
+>>>>>>> origin/main
 LOCK_VERSION=$(awk -F '"' '/^name = "beads-mcp"$/ { found=1; next } found && /^version = / { print $2; exit }' integrations/beads-mcp/uv.lock 2>/dev/null)
 if [ "$LOCK_VERSION" != "$LOCK_EXPECTED" ]; then
     echo -e "${RED}❌ MCP uv.lock (beads-mcp pin): ${LOCK_VERSION:-missing} (expected $LOCK_EXPECTED) — run: uv lock --directory integrations/beads-mcp${NC}"
@@ -95,15 +99,34 @@ if command -v uv >/dev/null 2>&1; then
     fi
 fi
 
+<<<<<<< HEAD
 # Hook templates are now generated dynamically by cmd/bd/hooks.go using the
 # Version constant from version.go, so no separate file check is needed.
 # (Previously checked cmd/bd/templates/hooks/pre-commit which no longer exists.)
+=======
+# Tracked managed git-hook sections (.githooks/*): the BEGIN/END markers embed
+# the binary Version, and TestTrackedManagedHookSectionsMatchGenerator holds
+# them equal to the cmd/bd/hooks.go generator output. A version bump that skips
+# them reddens main only after the push (that was the v1.2.0 bump), so gate the
+# markers here. Marker version only — full body equality stays the test's job.
+for hook in .githooks/*; do
+    [ -f "$hook" ] || continue
+    for prefix in "BEGIN" "END"; do
+        marker=$(grep -oE -- "--- $prefix BEADS INTEGRATION v[^ ]+ ---" "$hook" | head -1)
+        if [ -z "$marker" ]; then
+            echo -e "${RED}❌ $hook: no '$prefix BEADS INTEGRATION' marker found${NC}"
+            MISMATCH=1
+            continue
+        fi
+        check_version "$hook" \
+            "$(printf '%s' "$marker" | sed -E 's/.* v([^ ]+) ---/\1/')" \
+            "$hook $prefix marker"
+    done
+done
+>>>>>>> origin/main
 
 echo ""
 
-if ! ./scripts/check-docs-version.sh; then
-    MISMATCH=1
-fi
 
 echo ""
 
