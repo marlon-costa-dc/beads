@@ -50,10 +50,10 @@ Reference for bd Latest. Generated from `bd help --all`.
 - [bd state](#bd-state) — Query the current value of a state dimension
   - [bd state list](#bd-state-list) — List all state dimensions on an issue
 - [bd tag](#bd-tag) — Add a label to an issue
-- [bd todo](#dcdoc-todo) — Manage TODO items (convenience wrapper for task issues)
-  - [bd todo add](#dcdoc-todo-add) — Add a new TODO item
-  - [bd todo done](#dcdoc-todo-done) — Mark TODO(s) as done
-  - [bd todo list](#dcdoc-todo-list) — List TODO items
+- [bd todo](#bd-todo) — Manage TODO items (convenience wrapper for task issues)
+  - [bd todo add](#bd-todo-add) — Add a new TODO item
+  - [bd todo done](#bd-todo-done) — Mark TODO(s) as done
+  - [bd todo list](#bd-todo-list) — List TODO items
 - [bd update](#bd-update) — Update one or more issues
 
 ### Views & Reports:
