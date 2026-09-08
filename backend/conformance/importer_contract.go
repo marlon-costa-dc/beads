@@ -386,7 +386,8 @@ func assertImporterSkipped(t *testing.T, result publicops.ImportBatchResult, wan
 		t.Fatalf("SkippedDependencies = %+v, want exactly %d entry/entries %+v: the report is the whole reason a dropped edge is not data loss, so a missing entry hides one and a repeated entry is the deduplication clause failing",
 			result.SkippedDependencies, len(want), want)
 	}
-	for i, got := range result.SkippedDependencies {
+	for i := 0; i < len(result.SkippedDependencies) && i < len(want); i++ {
+		got := result.SkippedDependencies[i]
 		if got.IssueID != want[i].IssueID || got.DependsOnID != want[i].DependsOnID {
 			t.Errorf("SkippedDependencies[%d] names %s -> %s, want %s -> %s",
 				i, got.IssueID, got.DependsOnID, want[i].IssueID, want[i].DependsOnID)

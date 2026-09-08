@@ -1,6 +1,6 @@
 ---
 title: "bd compact"
-description: "Squash Dolt commits older than N days into a single commit."
+description: "Squash old Dolt commits to reduce history size"
 ---
 
 {/* AUTO-GENERATED: do not edit manually */}
@@ -21,7 +21,9 @@ How it works:
   2. Creates a squashed base commit from all old history
   3. Cherry-picks recent commits on top
   4. Swaps main branch to the compacted version
-  5. Runs Dolt GC to reclaim space
+  5. Prunes remote-tracking refs (they would keep the old history alive;
+     the next push or fetch re-creates them at the new tip)
+  6. Runs Dolt GC to reclaim space
 
 Examples:
   bd compact --dry-run               # Preview: show commit breakdown

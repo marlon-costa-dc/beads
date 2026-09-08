@@ -1,6 +1,6 @@
 ---
 title: "bd find-duplicates"
-description: "Find issues that are semantically similar but not exact duplicates."
+description: "Find semantically similar issues using text analysis or AI"
 ---
 
 {/* AUTO-GENERATED: do not edit manually */}
@@ -15,13 +15,13 @@ with different wording.
 
 Approaches:
   mechanical  Token-based text similarity (default, no API key needed)
-  ai          LLM-based semantic comparison (requires ANTHROPIC_API_KEY or ai.api_key)
+  ai          LLM-based semantic comparison (requires ANTHROPIC_API_KEY, MINIMAX_API_KEY, or ai.api_key)
 
 The mechanical approach tokenizes titles and descriptions, then computes
 Jaccard similarity between all issue pairs. It's fast and free but may
 miss semantically similar issues with very different wording.
 
-The AI approach sends candidate pairs to Claude for semantic comparison.
+The AI approach sends candidate pairs to an Anthropic-compatible model for semantic comparison.
 It first uses mechanical pre-filtering to reduce the number of API calls,
 then asks the LLM to judge whether the remaining pairs are true duplicates.
 
@@ -31,7 +31,13 @@ Examples:
   bd find-duplicates --method ai           # Use AI for semantic comparison
   bd find-duplicates --status open         # Only check open issues
   bd find-duplicates --limit 20            # Show top 20 pairs
+  bd find-duplicates --include-workflow    # Also consider orchestrator-managed beads
   bd find-duplicates --json                # JSON output
+
+Orchestrator-managed workflow beads (metadata carrying "gc."-prefixed keys,
+e.g. Gas City spec/logical/control template instances) are skipped: their
+identical template text is owned by the orchestrator lifecycle, not by
+content deduplication. Pass --include-workflow to include them anyway.
 
 ```
 bd find-duplicates [flags]
@@ -42,9 +48,11 @@ bd find-duplicates [flags]
 **Flags:**
 
 ```
-  -n, --limit int         Maximum number of pairs to show (default 50)
-      --method string     Detection method: mechanical, ai (default "mechanical")
-      --model string      AI model to use (only with --method ai; default from config ai.model)
-  -s, --status string     Filter by status (default: non-closed)
-      --threshold float   Similarity threshold (0.0-1.0, lower = more results) (default 0.5)
+      --include-workflow   Also consider orchestrator-managed workflow beads (metadata with gc.* keys); they are skipped by default
+  -n, --limit int          Maximum number of pairs to show (default 50)
+      --max-rows int       Hard upper bound on rows fetched from storage. Returns a non-zero exit (code 2) and an error to stderr if exceeded. 0 disables (the default). Overrides BEADS_MAX_ROWS for this invocation. Useful in CI/agent rigs that want a circuit breaker against pathological queries. Not supported under --proxied-server: an explicit --max-rows or BEADS_MAX_ROWS cap errors out rather than silently going unenforced.
+      --method string      Detection method: mechanical, ai (default "mechanical")
+      --model string       AI model to use (only with --method ai; default from config ai.model)
+  -s, --status string      Filter by status (default: non-closed)
+      --threshold float    Similarity threshold (0.0-1.0, lower = more results) (default 0.5)
 ```

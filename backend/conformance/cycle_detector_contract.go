@@ -489,13 +489,16 @@ func cycleDetectorTouching(report publicops.CycleReport, ids ...string) [][]stri
 // expectation itself.
 func assertCycleDetectorPath(t *testing.T, cycle publicops.Cycle, edgeOrder ...string) {
 	t.Helper()
-	lowest := 0
+	if len(edgeOrder) == 0 {
+		t.Fatal("edgeOrder is empty: no rotation anchor exists and the assertion would index out of range")
+	}
+	lowestIdx, lowestVal := 0, edgeOrder[0]
 	for i, id := range edgeOrder {
-		if id < edgeOrder[lowest] {
-			lowest = i
+		if id < lowestVal {
+			lowestIdx, lowestVal = i, id
 		}
 	}
-	want := append(append([]string{}, edgeOrder[lowest:]...), edgeOrder[:lowest]...)
+	want := append(append([]string{}, edgeOrder[lowestIdx:]...), edgeOrder[:lowestIdx]...)
 
 	got := make([]string, 0, len(cycle.Members))
 	for _, member := range cycle.Members {
