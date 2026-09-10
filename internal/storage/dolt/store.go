@@ -1183,8 +1183,20 @@ func newServerMode(ctx context.Context, cfg *Config) (*DoltStore, error) {
 	// would fail with cryptic unknown-column errors instead of a clear
 	// "upgrade bd" message (the stale-binary incident behind #4135/#4137).
 	if err := schema.CheckForwardDrift(ctx, db); err != nil {
-		_ = db.Close()
-		return nil, err
+		if !cfg.ReadOnly {
+			recovered, recErr := schema.RecoverAccidental12Cursor(ctx, db)
+			if recErr != nil {
+				_ = db.Close()
+				return nil, fmt.Errorf("accidental v1.2.x schema recovery: %w", recErr)
+			}
+			if !recovered {
+				_ = db.Close()
+				return nil, err
+			}
+		} else {
+			_ = db.Close()
+			return nil, err
+		}
 	}
 	if !cfg.ReadOnly {
 		if err := store.initSchema(ctx); err != nil {
