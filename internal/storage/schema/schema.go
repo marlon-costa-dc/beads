@@ -135,6 +135,46 @@ func CheckForwardDrift(ctx context.Context, db DBConn) error {
 	return checkSchemaSkew(ctx, db)
 }
 
+// RecoverAccidental12Cursor performs the only sanctioned forward-drift
+// recovery: the docs/RECOVERY-1.2.1.md metadata fix. The accidental
+// v1.2.0/v1.2.1 releases shipped strictly additive, replay-safe migrations
+// 54..65, so a database they migrated is schema-compatible with this v53
+// binary once its cursor is rolled back; the additive objects stay in place
+// and are simply unknown to this lineage, exactly as after the manual
+// runbook fix. Bounded to the known accidental range and only when this
+// binary's latest version is the v53 floor; anything else keeps failing with
+// the generic SchemaSkewError. Idempotent: a recovered database (cursor <=
+// floor) reports false and does nothing.
+func RecoverAccidental12Cursor(ctx context.Context, db DBConn) (bool, error) {
+	if LatestVersion() != accidental12SchemaFloor {
+		return false, nil
+	}
+	current, err := CurrentVersion(ctx, db)
+	if err != nil {
+		return false, err
+	}
+	if current <= accidental12SchemaFloor || current > accidental12SchemaCeiling {
+		return false, nil
+	}
+	if _, err := db.ExecContext(ctx,
+		"DELETE FROM schema_migrations WHERE version > ?", accidental12SchemaFloor); err != nil {
+		return false, fmt.Errorf("rolling schema_migrations cursor back to v%d: %w", accidental12SchemaFloor, err)
+	}
+	if _, err := db.ExecContext(ctx,
+		"CALL DOLT_ADD('-f', 'schema_migrations')"); err != nil {
+		return false, fmt.Errorf("staging schema_migrations cursor rollback: %w", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		"CALL DOLT_COMMIT('-m', 'schema: recovery: roll schema cursor back to v53 (accidental v1.2.x release, docs/RECOVERY-1.2.1.md)')"); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "nothing to commit") {
+			return false, fmt.Errorf("committing schema_migrations cursor rollback: %w", err)
+		}
+	}
+	log.Printf("schema: recovered accidental v1.2.x database: schema cursor rolled back v%d -> v%d (docs/RECOVERY-1.2.1.md)",
+		current, accidental12SchemaFloor)
+	return true, nil
+}
+
 // SchemaBehindError is returned when a database is opened on a path that
 // cannot migrate it (read-only opens) and its schema version is behind the
 // binary's. Without this check the open succeeds and queries fail later with

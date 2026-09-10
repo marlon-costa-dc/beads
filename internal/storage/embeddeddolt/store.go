@@ -303,7 +303,16 @@ func (s *EmbeddedDoltStore) initSchema(ctx context.Context) error {
 	// not. Runs after the USE switch so the version read resolves against the
 	// target database.
 	if err := schema.CheckForwardDrift(ctx, conn); err != nil {
-		return err
+		// Writable opens may apply the one sanctioned forward-drift recovery
+		// (docs/RECOVERY-1.2.1.md): the accidental v1.2.x cursor rollback.
+		// Anything outside that exact known range still fails loud.
+		recovered, recErr := schema.RecoverAccidental12Cursor(ctx, conn)
+		if recErr != nil {
+			return fmt.Errorf("embeddeddolt: accidental v1.2.x schema recovery: %w", recErr)
+		}
+		if !recovered {
+			return err
+		}
 	}
 
 	// #4259: refuse to silently apply pending migrations to a remote-backed,
