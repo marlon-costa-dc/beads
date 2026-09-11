@@ -184,7 +184,12 @@ func getAssignedStatistics(assignee string) *types.Statistics {
 		case types.StatusInProgress:
 			stats.InProgressIssues++
 		case types.StatusBlocked:
-			stats.BlockedIssues++
+			blocked := 0
+			if stats.BlockedIssues != nil {
+				blocked = *stats.BlockedIssues
+			}
+			blocked++
+			stats.BlockedIssues = &blocked
 		case types.StatusDeferred:
 			stats.DeferredIssues++
 		case types.StatusClosed:
@@ -198,7 +203,8 @@ func getAssignedStatistics(assignee string) *types.Statistics {
 	}
 	readyIssues, err := store.GetReadyWork(ctx, readyFilter)
 	if err == nil {
-		stats.ReadyIssues = len(readyIssues)
+		ready := len(readyIssues)
+		stats.ReadyIssues = &ready
 	}
 
 	return stats

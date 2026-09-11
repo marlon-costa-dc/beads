@@ -47,7 +47,7 @@ chmod +x $(which bd)
 bd init --quiet
 
 # Or specify database
-bd --db .beads/beads.db list
+bd --db .beads/dolt/beads list
 ```
 
 ### Database locked
@@ -180,7 +180,7 @@ bd config set import.orphan_handling allow
 
 ```bash
 # Check database size
-ls -lh .beads/beads.db
+ls -lh .beads/dolt/
 
 # Compact if large
 bd admin compact --analyze
