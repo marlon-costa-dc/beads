@@ -2,7 +2,7 @@ package main
 
 // Init-safety decision logic.
 //
-// See engdocs/adr/0002-init-safety-invariants.md for the ADR this encodes.
+// See docs/adr/0002-init-safety-invariants.md for the ADR this encodes.
 // The invariant: every `bd init` resolves `project_id` from exactly one
 // explicitly-named source; ambiguous sources refuse. `--force` (or its
 // replacement `--reinit-local`) bypasses the local data-safety guard only;
@@ -14,7 +14,7 @@ package main
 // Error-message contract: no runtime error may emit a complete destructive
 // invocation. Flag identifiers and safe-tool names are permitted; token
 // values and other friction-bearing arguments live in `bd help init-safety`
-// and `docs/recovery/init-safety.md` only.
+// and `docs/RECOVERY.md` only.
 
 import "fmt"
 
@@ -26,14 +26,18 @@ const (
 	// `--discard-remote`. Ambiguous identity source.
 	ExitRemoteDivergenceRefused = 10
 
-	// ExitLocalExistsRefused signals `bd init` was called against a
-	// directory that already has beads data, without `--force` or
-	// `--reinit-local`. The existing local-safety refusal.
+	// ExitLocalExistsRefused signals the interactive typed-confirmation
+	// for a destructive re-init over existing local data was declined at
+	// the prompt. That TTY-only path is its sole source: the same guard's
+	// non-interactive branch returns ExitDestroyTokenMissing instead, and
+	// a plain `bd init` over an initialized workspace is refused by the
+	// local-safety guard with an ordinary error, not this code.
 	ExitLocalExistsRefused = 11
 
-	// ExitDestroyTokenMissing signals `--discard-remote` was passed in
-	// non-interactive mode without a valid `--destroy-token`. The caller
-	// must look up the token format via `bd help init-safety`.
+	// ExitDestroyTokenMissing signals a destructive re-init was requested
+	// in non-interactive mode without a valid `--destroy-token`: either
+	// `--discard-remote`, or `--reinit-local` over existing local issues.
+	// The caller must look up the token format via `bd help init-safety`.
 	ExitDestroyTokenMissing = 12
 )
 
@@ -204,7 +208,7 @@ func refusalMessageTokenMissing() string {
 
 // FormatDestroyToken returns the destroy-token the caller should supply
 // for a given issue prefix. Callers that need to surface this to users
-// should do so via `bd help init-safety` or `docs/recovery/init-safety.md` — NOT via
+// should do so via `bd help init-safety` or `docs/RECOVERY.md` — NOT via
 // runtime error text (see the ADR invariant).
 func FormatDestroyToken(prefix string) string {
 	return fmt.Sprintf("DESTROY-%s", prefix)

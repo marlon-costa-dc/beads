@@ -167,19 +167,14 @@ jobs:
               break
             fi
             echo "::warning::apt-get update attempt $attempt failed or timed out"
-            # No backoff after the final attempt - there is nothing left to wait for.
             if [ "$attempt" -lt 3 ]; then
               sleep 10
             fi
           done
-          # Deliberate best-effort: a stale index still installs these packages
-          # from the runner image cache far more often than not, and failing the
-          # job here would turn a transient mirror outage into a red build. The
-          # warning is what makes the degraded path visible in the job log.
           if [ -z "$updated" ]; then
             echo "::warning::apt-get update failed after 3 attempts; proceeding with cached index"
           fi
-          sudo timeout 300 apt-get install -y gcc-mingw-w64-x86-64 gcc-aarch64-linux-gnu osslsigncode
+          sudo apt-get install -y gcc-mingw-w64-x86-64 gcc-aarch64-linux-gnu osslsigncode
 
       - name: Install go-winres for Windows PE resource embedding
         run: go install github.com/tc-hib/go-winres@latest
