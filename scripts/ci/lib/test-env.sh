@@ -14,12 +14,15 @@ beads_test_env_enter() {
         return 0
     fi
 
-    local repo_root cache_home tmp_base root
+    local repo_root root
     repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
     cache_home="${XDG_CACHE_HOME:-$HOME/.cache}"
-    tmp_base="${BEADS_TEST_TMP_BASE:-$cache_home/beads/test-tmp}"
-    mkdir -p "$tmp_base"
-    root="$(mktemp -d "$tmp_base/beads-test-env-XXXXXX")"
+    # The sandbox root itself must sit on ancestor-clean ground (/tmp), never
+    # under the caller's TMPDIR or real home: once TMPDIR="$root/tmp" is
+    # exported below, every t.TempDir() inherits $root's ancestors, and a root
+    # nested inside a real home would re-expose ~/.beads to directory-walk
+    # tests. (Root holds only small fake homes; Go caches set their own paths.)
+    root="$(mktemp -d /tmp/beads-test-env-XXXXXX)"
     export BEADS_TEST_ENV_ROOT="$root"
     export BEADS_TEST_ENV_ACTIVE=1
     export BEADS_TEST_DISCOVERY_CEILING="$root"

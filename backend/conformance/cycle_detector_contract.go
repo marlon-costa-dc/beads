@@ -492,13 +492,8 @@ func assertCycleDetectorPath(t *testing.T, cycle publicops.Cycle, edgeOrder ...s
 	if len(edgeOrder) == 0 {
 		t.Fatal("edgeOrder is empty: no rotation anchor exists and the assertion would index out of range")
 	}
-	lowestIdx, lowestVal := 0, edgeOrder[0]
-	for i, id := range edgeOrder {
-		if id < lowestVal {
-			lowestIdx, lowestVal = i, id
-		}
-	}
-	want := append(append([]string{}, edgeOrder[lowestIdx:]...), edgeOrder[:lowestIdx]...)
+	pivot := slices.Index(edgeOrder, slices.Min(edgeOrder))
+	want := append(append([]string{}, edgeOrder[pivot:]...), edgeOrder[:pivot]...)
 
 	got := make([]string, 0, len(cycle.Members))
 	for _, member := range cycle.Members {
