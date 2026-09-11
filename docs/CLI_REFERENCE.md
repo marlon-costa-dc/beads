@@ -1595,12 +1595,18 @@ The AI approach sends candidate pairs to Claude for semantic comparison.
 It first uses mechanical pre-filtering to reduce the number of API calls,
 then asks the LLM to judge whether the remaining pairs are true duplicates.
 
+Orchestrator-managed workflow beads (metadata carrying "gc."-prefixed keys,
+e.g. Gas City spec/logical/control template instances) are skipped: their
+identical template text is owned by the orchestrator lifecycle, not by
+content deduplication. Pass --include-workflow to include them anyway.
+
 Examples:
   bd find-duplicates                       # Mechanical similarity (default)
   bd find-duplicates --threshold 0.4       # Lower threshold = more results
   bd find-duplicates --method ai           # Use AI for semantic comparison
   bd find-duplicates --status open         # Only check open issues
   bd find-duplicates --limit 20            # Show top 20 pairs
+  bd find-duplicates --include-workflow    # Also consider orchestrator-managed beads
   bd find-duplicates --json                # JSON output
 
 ```
@@ -1612,11 +1618,12 @@ bd find-duplicates [flags]
 **Flags:**
 
 ```
-  -n, --limit int         Maximum number of pairs to show (default 50)
-      --method string     Detection method: mechanical, ai (default "mechanical")
-      --model string      AI model to use (only with --method ai; default from config ai.model)
-  -s, --status string     Filter by status (default: non-closed)
-      --threshold float   Similarity threshold (0.0-1.0, lower = more results) (default 0.5)
+      --include-workflow   Also consider orchestrator-managed workflow beads (metadata with gc.* keys); they are skipped by default
+  -n, --limit int          Maximum number of pairs to show (default 50)
+      --method string      Detection method: mechanical, ai (default "mechanical")
+      --model string       AI model to use (only with --method ai; default from config ai.model)
+  -s, --status string      Filter by status (default: non-closed)
+      --threshold float    Similarity threshold (0.0-1.0, lower = more results) (default 0.5)
 ```
 
 ### bd history
@@ -1976,11 +1983,18 @@ Groups issues by content hash and reports duplicates with suggested merge target
 The merge target is chosen by:
 1. Reference count (most referenced issue wins)
 2. Lexicographically smallest ID if reference counts are equal
-Only groups issues with matching status (open with open, closed with closed).
+Only non-closed issues are considered.
+
+Orchestrator-managed workflow beads (metadata carrying "gc."-prefixed keys,
+e.g. Gas City spec/logical/control template instances) are skipped: their
+identical template text is owned by the orchestrator lifecycle, not by
+content deduplication. Pass --include-workflow to include them anyway.
+
 Example:
   bd duplicates                    # Show all duplicate groups
   bd duplicates --auto-merge       # Automatically merge all duplicates
   bd duplicates --dry-run          # Show what would be merged
+  bd duplicates --include-workflow # Also consider orchestrator-managed beads
 
 ```
 bd duplicates [flags]
@@ -1989,8 +2003,9 @@ bd duplicates [flags]
 **Flags:**
 
 ```
-      --auto-merge   Automatically merge all duplicates
-      --dry-run      Show what would be merged without making changes
+      --auto-merge         Automatically merge all duplicates
+      --dry-run            Show what would be merged without making changes
+      --include-workflow   Also consider orchestrator-managed workflow beads (metadata with gc.* keys); they are skipped by default
 ```
 
 ### bd epic
@@ -4760,16 +4775,19 @@ Configuration:
   bd config set jira.username "your_email@company.com"  # For Jira Cloud
   bd config set jira.push_prefix "hippo"       # Only push hippo-* issues to Jira
   bd config set jira.push_prefix "proj1,proj2" # Multiple prefixes (comma-separated)
+  bd config set jira.epic_key "PROJ-148"       # Parent epic for created issues
 
 Environment variables (alternative to config):
   JIRA_API_TOKEN  - Jira API token
   JIRA_USERNAME   - Jira username/email
   JIRA_PROJECTS   - Comma-separated project keys
+  JIRA_EPIC_KEY   - Epic key set as parent on created issues
 
 Examples:
   bd jira sync --pull         # Import issues from Jira
   bd jira sync --push         # Export issues to Jira
   bd jira sync                # Bidirectional sync (pull then push)
+  bd jira sync --state all    # Include closed issues (default: open)
   bd jira sync --dry-run      # Preview sync without changes
   bd jira status              # Show sync status
 
@@ -4859,7 +4877,7 @@ bd jira sync [flags]
       --project strings   Project key(s) to sync (overrides configured project/projects)
       --pull              Pull issues from Jira
       --push              Push issues to Jira
-      --state string      Issue state to sync: open, closed, all (default "all")
+      --state string      Issue state to sync: open (default), closed, all (default "open")
 ```
 
 ### bd linear
@@ -5921,8 +5939,10 @@ ADOPTING A REMOTE
 
 DESTROY-TOKEN (non-interactive only)
 
-  When running with no TTY (CI, agents, piped input), --discard-remote
-  requires an explicit --destroy-token value. The token format is:
+  When running with no TTY (CI, agents, piped input), a destructive
+  re-init requires an explicit --destroy-token value. That covers both
+  --discard-remote and --reinit-local over existing issues. The token
+  format is:
 
       DESTROY-&lt;issue-prefix&gt;
 
@@ -5940,7 +5960,9 @@ EXIT CODES
   10    refused: remote has Dolt history and you selected local history
         without --discard-remote
   11    refused: existing local data and you declined the destroy confirm
-  12    refused: --discard-remote passed without a valid --destroy-token
+        (interactive mode only)
+  12    refused: destructive re-init (--discard-remote, or --reinit-local
+        over existing issues) without a valid --destroy-token
         (non-interactive mode)
 
 RECOVERY
