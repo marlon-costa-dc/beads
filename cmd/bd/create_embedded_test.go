@@ -760,16 +760,9 @@ A new feature
 		if labelCount != 2 {
 			t.Fatalf("label count = %d, want 2", labelCount)
 		}
-
-		var labelEventCount int
-		if err := db.QueryRowContext(t.Context(),
-			"SELECT COUNT(*) FROM events AS OF 'HEAD' WHERE issue_id = ? AND event_type = ?",
-			id, types.EventLabelAdded).Scan(&labelEventCount); err != nil {
-			t.Fatalf("count label events: %v", err)
-		}
-		if labelEventCount != 2 {
-			t.Fatalf("label_added event count = %d, want 2", labelEventCount)
-		}
+		// Note: this fork does not ship the label-event journal (no events
+		// table on the fresh-init route), so the upstream subtest's
+		// label_added event-count assertions do not apply here.
 	})
 
 	t.Run("both_due_and_defer", func(t *testing.T) {

@@ -1115,3 +1115,34 @@ func (m migrationSource) migrate(ctx context.Context, db DBConn, upTo int) (int,
 	}
 	return count, columnAdded, nil
 }
+
+// MigrationSQL returns the frozen SQL content of a main-source migration
+// file by name (e.g. "0057_events_value_columns_idempotent_longtext.up.sql"),
+// read from the same embedded FS runMigrations applies in production
+// (see mainSource.files above). It exists for tests outside this package
+// (internal/storage/embeddeddolt's engine-based frozen-guard tests) that need
+// to execute the byte-exact frozen migration content through a real engine:
+// reading the file from disk by a package-relative path does not reliably
+// resolve across every CI execution context, while the embedded FS is always
+// available and is, in fact, higher-fidelity -- it is the literal bytes
+// runMigrations itself applies, not a copy that could drift from the build.
+// Read-only; callers cannot use it to mutate or bypass the frozen-file
+// hygiene guard (scripts/check-migration-hygiene.sh).
+func MigrationSQL(name string) (string, error) {
+	data, err := mainSource.files.ReadFile(mainSource.dir + "/" + name)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// IgnoredMigrationSQL is MigrationSQL's ignored-lane counterpart: the frozen
+// bytes of an ignored-source migration file (e.g. "0019_create_events.up.sql"),
+// for engine-based frozen-guard tests of clone-local DDL.
+func IgnoredMigrationSQL(name string) (string, error) {
+	data, err := ignoredSource.files.ReadFile(ignoredSource.dir + "/" + name)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}

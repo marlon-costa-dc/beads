@@ -264,3 +264,35 @@ WHERE w.issue_type = 'rig';
 DELETE FROM wisps WHERE issue_type = 'rig';
 
 SET FOREIGN_KEY_CHECKS = 1;`
+
+// cliSubstituteAssumesWispTables reports whether cliCompatibleMigrationSQL's
+// substitute for name presumes the clone-local wisp_* tables already exist.
+//
+// AllMigrationsSQL() always satisfies that presumption — the main series
+// creates every wisp table on its way past — so the bundle route is
+// unaffected. A replay over a drifted database is not: #4695/#4176 is the
+// shape where the main cursor arrives at-latest with the wisp tables never
+// synced (they are dolt_ignored, so a clone can simply not have them), and
+// 0047's repair recreates only wisps and wisp_dependencies. On that database
+// the substitute's direct DDL aborts the batch with `table not found` while
+// the frozen source text's own PREPARE guards correctly no-op: an
+// INFORMATION_SCHEMA probe for a missing table yields NULL, and
+// `IF(NULL = 1, '<ddl>', 'SELECT 1')` takes the no-op branch.
+//
+// So a replay caller must use the frozen text for these, and only these.
+// The other substitutes are safe to replay because they touch main-plane
+// tables that are always present.
+func cliSubstituteAssumesWispTables(name string) bool {
+	switch name {
+	case "0053_repair_rig_wisps.up.sql":
+		// cliMigration0053RepairRigWisps drops every @has_wisp_* guard and
+		// reads all five wisp tables unconditionally.
+		return true
+	case "0065_widen_wisp_comments_text.up.sql":
+		// cliMigration0065WidenWispCommentsText is a bare MODIFY on
+		// wisp_comments.
+		return true
+	default:
+		return false
+	}
+}
