@@ -45,6 +45,10 @@ func RemoveRemote(ctx context.Context, db DBConn, name string) error {
 // every other open session on the same engine, so a failed fetch would break
 // concurrent in-flight connections (bd-6dnrw.10).
 func Fetch(ctx context.Context, db DBConn, peer, user string) error {
+	return withRemoteEnvGuards(func() error { return fetch(ctx, db, peer, user) })
+}
+
+func fetch(ctx context.Context, db DBConn, peer, user string) error {
 	var err error
 	if user != "" {
 		_, err = db.ExecContext(ctx, "CALL DOLT_FETCH('--user', ?, ?)", user, peer)
@@ -62,6 +66,10 @@ func Fetch(ctx context.Context, db DBConn, peer, user string) error {
 // must be set in the in-process Dolt server's environment. Required when
 // pushing to a remotesapi server that enforces CLONE_ADMIN authentication.
 func Push(ctx context.Context, db DBConn, remote, branch, user string) error {
+	return withRemoteEnvGuards(func() error { return push(ctx, db, remote, branch, user) })
+}
+
+func push(ctx context.Context, db DBConn, remote, branch, user string) error {
 	if user != "" {
 		if _, err := db.ExecContext(ctx, "CALL DOLT_PUSH('--user', ?, ?, ?)", user, remote, branch); err != nil {
 			return fmt.Errorf("push to %s/%s: %w", remote, branch, err)
@@ -77,6 +85,10 @@ func Push(ctx context.Context, db DBConn, remote, branch, user string) error {
 // ForcePush force-pushes the given branch to the named remote.
 // See Push for the user/auth contract.
 func ForcePush(ctx context.Context, db DBConn, remote, branch, user string) error {
+	return withRemoteEnvGuards(func() error { return forcePush(ctx, db, remote, branch, user) })
+}
+
+func forcePush(ctx context.Context, db DBConn, remote, branch, user string) error {
 	if user != "" {
 		if _, err := db.ExecContext(ctx, "CALL DOLT_PUSH('--force', '--user', ?, ?, ?)", user, remote, branch); err != nil {
 			return fmt.Errorf("force push to %s/%s: %w", remote, branch, err)
@@ -100,6 +112,10 @@ func ForcePush(ctx context.Context, db DBConn, remote, branch, user string) erro
 // user/auth contract; only the fetch step authenticates, since the merge step
 // is local.
 func Pull(ctx context.Context, db DBConn, remote, branch, user string) error {
+	return withRemoteEnvGuards(func() error { return pull(ctx, db, remote, branch, user) })
+}
+
+func pull(ctx context.Context, db DBConn, remote, branch, user string) error {
 	if user != "" {
 		if _, err := db.ExecContext(ctx, "CALL DOLT_FETCH('--user', ?, ?, ?)", user, remote, branch); err != nil {
 			return fmt.Errorf("fetch from %s/%s: %w", remote, branch, err)
