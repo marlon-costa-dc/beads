@@ -197,6 +197,14 @@ type MergeSlotResult struct {
 // DoltStorage is the full interface for Dolt-backed stores, composing the core
 // Storage interface with all capability sub-interfaces. Both DoltStore and
 // EmbeddedDoltStore satisfy this interface.
+// FastStatisticsStore provides a statistics method that skips the blocked-count
+// traversal for callers that don't need it (e.g. bd stats --no-blocked).
+type FastStatisticsStore interface {
+	// GetStatisticsNoBlocked returns aggregate counts without the blocked-set
+	// computation (computeBlockedIDs). BlockedIssues is nil in the result.
+	GetStatisticsNoBlocked(ctx context.Context) (*types.Statistics, error)
+}
+
 type DoltStorage interface {
 	Storage
 	VersionControl
@@ -204,6 +212,7 @@ type DoltStorage interface {
 	RemoteStore
 	SyncStore
 	FederationStore
+	FastStatisticsStore
 	BulkIssueStore
 	DependencyQueryStore
 	AnnotationStore
@@ -214,6 +223,14 @@ type DoltStorage interface {
 
 // RawDBAccessor provides raw *sql.DB access for diagnostics and migrations.
 // Callers that need raw SQL should type-assert to this interface.
+// ReadyWorkCounter sizes the total ready-work count for a filter without
+// materializing the counts mega-query. It is identical to
+// len(GetReadyWorkWithCounts(filter with Limit=0)) but computed with cheap
+// indexed COUNT(*)s over the ready predicate.
+type ReadyWorkCounter interface {
+	CountReadyWork(ctx context.Context, filter types.WorkFilter) (int, error)
+}
+
 type RawDBAccessor interface {
 	DB() *sql.DB
 	UnderlyingDB() *sql.DB

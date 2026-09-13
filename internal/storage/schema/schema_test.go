@@ -1016,3 +1016,18 @@ func TestUnstageIgnoredTablesResetsExistingIgnoredTables(t *testing.T) {
 		t.Fatalf("unmet sql expectations: %v", err)
 	}
 }
+
+// runDoltSQLExpectingError runs query the same way runDoltSQL does but returns
+// the error instead of failing the test, so a caller can assert that a
+// statement really is rejected.
+func runDoltSQLExpectingError(t *testing.T, dir, query string) error {
+	t.Helper()
+	sqlFile := filepath.Join(t.TempDir(), "migration-bundle.sql")
+	if err := os.WriteFile(sqlFile, []byte(query), 0o644); err != nil {
+		t.Fatalf("write dolt sql file: %v", err)
+	}
+	cmd := exec.Command("dolt", "sql", "-f", sqlFile)
+	cmd.Dir = dir
+	_, err := cmd.CombinedOutput()
+	return err
+}

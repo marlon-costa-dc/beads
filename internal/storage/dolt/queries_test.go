@@ -2241,8 +2241,8 @@ func TestGetStatistics_EmptyStore(t *testing.T) {
 	if stats.ClosedIssues != 0 {
 		t.Errorf("expected 0 closed issues, got %d", stats.ClosedIssues)
 	}
-	if stats.BlockedIssues != 0 {
-		t.Errorf("expected 0 blocked issues, got %d", stats.BlockedIssues)
+	if stats.BlockedIssues == nil || *stats.BlockedIssues != 0 {
+		t.Errorf("expected 0 blocked issues, got %v", stats.BlockedIssues)
 	}
 }
 
@@ -2334,8 +2334,8 @@ func TestGetStatistics_BlockedCount(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if stats.BlockedIssues != 1 {
-		t.Errorf("expected 1 blocked issue, got %d", stats.BlockedIssues)
+	if stats.BlockedIssues == nil || *stats.BlockedIssues != 1 {
+		t.Errorf("expected 1 blocked issue, got %v", stats.BlockedIssues)
 	}
 }
 
@@ -2446,8 +2446,8 @@ func TestGetStatistics_ReadyIssuesExcludesBlocked(t *testing.T) {
 	}
 
 	// 3 open issues, 1 blocked => ready = 3 - 1 = 2
-	if stats.ReadyIssues != 2 {
-		t.Errorf("expected 2 ready issues (3 open - 1 blocked), got %d", stats.ReadyIssues)
+	if stats.ReadyIssues == nil || *stats.ReadyIssues != 2 {
+		t.Errorf("expected 2 ready issues (3 open - 1 blocked), got %v", stats.ReadyIssues)
 	}
 }
 

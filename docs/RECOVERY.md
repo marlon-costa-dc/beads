@@ -1,6 +1,6 @@
 # Recovery Playbooks
 
-Last reviewed: 2026-06-09
+Last reviewed: 2026-09-11
 
 Freshness source: `cmd/bd/init.go`, `cmd/bd/init_safety.go`,
 `cmd/bd/init_safety_test.go`, and `cmd/bd/dolt.go`.

@@ -192,3 +192,16 @@ func countColumn(t *testing.T, ctx context.Context, store *DoltStore, table, col
 	}
 	return n
 }
+
+// assertSchemaVersionAtLeast fails the test when the database's recorded
+// schema_migrations version is below want.
+func assertSchemaVersionAtLeast(ctx context.Context, t *testing.T, db *sql.DB, want int) {
+	t.Helper()
+	var got int
+	if err := db.QueryRowContext(ctx, "SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&got); err != nil {
+		t.Fatalf("read schema version: %v", err)
+	}
+	if got < want {
+		t.Fatalf("schema version = %d, want >= %d", got, want)
+	}
+}
