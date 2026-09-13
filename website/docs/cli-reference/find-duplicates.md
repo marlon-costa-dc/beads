@@ -28,12 +28,18 @@ The AI approach sends candidate pairs to Claude for semantic comparison.
 It first uses mechanical pre-filtering to reduce the number of API calls,
 then asks the LLM to judge whether the remaining pairs are true duplicates.
 
+Orchestrator-managed workflow beads (metadata carrying "gc."-prefixed keys,
+e.g. Gas City spec/logical/control template instances) are skipped: their
+identical template text is owned by the orchestrator lifecycle, not by
+content deduplication. Pass --include-workflow to include them anyway.
+
 Examples:
   bd find-duplicates                       # Mechanical similarity (default)
   bd find-duplicates --threshold 0.4       # Lower threshold = more results
   bd find-duplicates --method ai           # Use AI for semantic comparison
   bd find-duplicates --status open         # Only check open issues
   bd find-duplicates --limit 20            # Show top 20 pairs
+  bd find-duplicates --include-workflow    # Also consider orchestrator-managed beads
   bd find-duplicates --json                # JSON output
 
 ```
@@ -45,9 +51,10 @@ bd find-duplicates [flags]
 **Flags:**
 
 ```
-  -n, --limit int         Maximum number of pairs to show (default 50)
-      --method string     Detection method: mechanical, ai (default "mechanical")
-      --model string      AI model to use (only with --method ai; default from config ai.model)
-  -s, --status string     Filter by status (default: non-closed)
-      --threshold float   Similarity threshold (0.0-1.0, lower = more results) (default 0.5)
+      --include-workflow   Also consider orchestrator-managed workflow beads (metadata with gc.* keys); they are skipped by default
+  -n, --limit int          Maximum number of pairs to show (default 50)
+      --method string      Detection method: mechanical, ai (default "mechanical")
+      --model string       AI model to use (only with --method ai; default from config ai.model)
+  -s, --status string      Filter by status (default: non-closed)
+      --threshold float    Similarity threshold (0.0-1.0, lower = more results) (default 0.5)
 ```

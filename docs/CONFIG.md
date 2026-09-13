@@ -1,6 +1,6 @@
 # Configuration System
 
-Last reviewed: 2026-05-08
+Last reviewed: 2026-09-11
 
 Freshness source: `cmd/bd/main.go`, `cmd/bd/config.go`, and
 `internal/configfile/`.
@@ -1010,7 +1010,7 @@ jira_project = get_config("jira.project")
 1. **Use namespaces**: Prefix keys with integration name (e.g., `jira.*`, `linear.*`)
 2. **Hierarchical keys**: Use dots for structure (e.g., `jira.status_map.open`)
 3. **Document your keys**: Add comments in integration scripts
-4. **Security**: Store tokens in config, but ensure `.beads/dolt/` and `.beads/*.db` are in `.gitignore` (bd does this automatically)
+4. **Security**: Store tokens in config, but ensure `.beads/` is in `.gitignore` (bd does this automatically)
 5. **Per-project**: Configuration is project-specific, so each repo can have different settings
 
 ## Integration with bd Commands

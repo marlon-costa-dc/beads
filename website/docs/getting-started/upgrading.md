@@ -221,7 +221,7 @@ If you're upgrading from a much older version of bd, your project may use a diff
 
 | Era | Versions | Storage | 
 |---|---|---|
-| SQLite | v0.30–v0.50 | `.beads/beads.db` |
+| SQLite | v0.30–v0.50 | legacy single-file store |
 | Dolt server | v0.50–v0.58 | `.beads/dolt/` (external server) |
 | Embedded Dolt (old) | v0.59–v0.63.2 | `.beads/dolt/` (in-process) |
 | Embedded Dolt (current) | v0.63.3+ | `.beads/embeddeddolt/` |

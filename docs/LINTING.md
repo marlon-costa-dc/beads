@@ -1,6 +1,6 @@
 # Linting Policy
 
-Last reviewed: 2026-05-29
+Last reviewed: 2026-09-11
 
 Freshness source: `.golangci.yml`, `.github/workflows/pr.yml`,
 `.github/workflows/main.yml`, and

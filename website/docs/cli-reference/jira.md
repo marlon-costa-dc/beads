@@ -20,16 +20,19 @@ Configuration:
   bd config set jira.username "your_email@company.com"  # For Jira Cloud
   bd config set jira.push_prefix "hippo"       # Only push hippo-* issues to Jira
   bd config set jira.push_prefix "proj1,proj2" # Multiple prefixes (comma-separated)
+  bd config set jira.epic_key "PROJ-148"       # Parent epic for created issues
 
 Environment variables (alternative to config):
   JIRA_API_TOKEN  - Jira API token
   JIRA_USERNAME   - Jira username/email
   JIRA_PROJECTS   - Comma-separated project keys
+  JIRA_EPIC_KEY   - Epic key set as parent on created issues
 
 Examples:
   bd jira sync --pull         # Import issues from Jira
   bd jira sync --push         # Export issues to Jira
   bd jira sync                # Bidirectional sync (pull then push)
+  bd jira sync --state all    # Include closed issues (default: open)
   bd jira sync --dry-run      # Preview sync without changes
   bd jira status              # Show sync status
 
@@ -119,5 +122,5 @@ bd jira sync [flags]
       --project strings   Project key(s) to sync (overrides configured project/projects)
       --pull              Pull issues from Jira
       --push              Push issues to Jira
-      --state string      Issue state to sync: open, closed, all (default "all")
+      --state string      Issue state to sync: open (default), closed, all (default "open")
 ```
