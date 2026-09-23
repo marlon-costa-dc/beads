@@ -1,9 +1,21 @@
 package dolt
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 )
+
+// mustInitializeServerCircuitBreaker calls initializeServerCircuitBreaker and
+// fails the test with its error.
+func mustInitializeServerCircuitBreaker(t *testing.T, cfg *Config) *circuitBreaker {
+	t.Helper()
+	cb, err := initializeServerCircuitBreaker(cfg)
+	if err != nil {
+		t.Fatalf("initializeServerCircuitBreaker() error = %v", err)
+	}
+	return cb
+}
 
 func TestInitializeServerCircuitBreakerHonorsDisableAutoStart(t *testing.T) {
 	t.Setenv("BEADS_TEST_MODE", "")
@@ -16,20 +28,20 @@ func TestInitializeServerCircuitBreakerHonorsDisableAutoStart(t *testing.T) {
 
 	cleanCalls := 0
 	newCalls := 0
-	cleanServerCircuitState = func() { cleanCalls++ }
-	newServerCircuitBreaker = func(host string, port int, database string) *circuitBreaker {
+	cleanServerCircuitState = func() error { cleanCalls++; return nil }
+	newServerCircuitBreaker = func(host string, port int, database string) (*circuitBreaker, error) {
 		newCalls++
-		return &circuitBreaker{filePath: filepath.Join(t.TempDir(), "circuit.json")}
+		return &circuitBreaker{filePath: filepath.Join(t.TempDir(), "circuit.json")}, nil
 	}
 
-	if got := initializeServerCircuitBreaker(&Config{DisableAutoStart: true, ServerPort: 3307}); got != nil {
+	if got := mustInitializeServerCircuitBreaker(t, &Config{DisableAutoStart: true, ServerPort: 3307}); got != nil {
 		t.Fatal("strict read-only (DisableAutoStart) server open created a circuit breaker")
 	}
 	if cleanCalls != 0 || newCalls != 0 {
 		t.Fatalf("strict read-only server open mutated circuit state: clean=%d new=%d", cleanCalls, newCalls)
 	}
 
-	if got := initializeServerCircuitBreaker(&Config{ServerPort: 3307}); got == nil {
+	if got := mustInitializeServerCircuitBreaker(t, &Config{ServerPort: 3307}); got == nil {
 		t.Fatal("writable server open must retain circuit breaker behavior")
 	}
 	if cleanCalls != 1 || newCalls != 1 {
@@ -40,7 +52,7 @@ func TestInitializeServerCircuitBreakerHonorsDisableAutoStart(t *testing.T) {
 	// DisableAutoStart, and must retain the writable-open circuit breaker
 	// behavior (regression guard for the ReadOnly/DisableAutoStart
 	// conflation fixed in this change).
-	if got := initializeServerCircuitBreaker(&Config{ReadOnly: true, ServerPort: 3307}); got == nil {
+	if got := mustInitializeServerCircuitBreaker(t, &Config{ReadOnly: true, ServerPort: 3307}); got == nil {
 		t.Fatal("ordinary classified-read (ReadOnly without DisableAutoStart) must retain circuit breaker behavior")
 	}
 	if cleanCalls != 2 || newCalls != 2 {
@@ -59,17 +71,44 @@ func TestInitializeServerCircuitBreakerSkipsTestMode(t *testing.T) {
 
 	cleanCalls := 0
 	newCalls := 0
-	cleanServerCircuitState = func() { cleanCalls++ }
-	newServerCircuitBreaker = func(string, int, string) *circuitBreaker {
+	cleanServerCircuitState = func() error { cleanCalls++; return nil }
+	newServerCircuitBreaker = func(string, int, string) (*circuitBreaker, error) {
 		newCalls++
-		return &circuitBreaker{}
+		return &circuitBreaker{}, nil
 	}
 
-	if got := initializeServerCircuitBreaker(&Config{ServerPort: 3307}); got != nil {
+	if got := mustInitializeServerCircuitBreaker(t, &Config{ServerPort: 3307}); got != nil {
 		t.Fatal("test-mode server open created a circuit breaker")
 	}
 	if cleanCalls != 0 || newCalls != 0 {
 		t.Fatalf("test-mode server open touched circuit state: clean=%d new=%d", cleanCalls, newCalls)
+	}
+}
+
+func TestInitializeServerCircuitBreakerPropagatesStateErrors(t *testing.T) {
+	t.Setenv("BEADS_TEST_MODE", "")
+	originalClean := cleanServerCircuitState
+	originalNew := newServerCircuitBreaker
+	t.Cleanup(func() {
+		cleanServerCircuitState = originalClean
+		newServerCircuitBreaker = originalNew
+	})
+
+	cleanErr := errors.New("circuit state directory unavailable")
+	cleanServerCircuitState = func() error { return cleanErr }
+	newServerCircuitBreaker = func(string, int, string) (*circuitBreaker, error) {
+		t.Fatal("breaker constructed after its state cleanup failed")
+		return nil, nil
+	}
+	if _, err := initializeServerCircuitBreaker(&Config{ServerPort: 3307}); !errors.Is(err, cleanErr) {
+		t.Fatalf("initializeServerCircuitBreaker() error = %v, want %v", err, cleanErr)
+	}
+
+	newErr := errors.New("circuit state directory not creatable")
+	cleanServerCircuitState = func() error { return nil }
+	newServerCircuitBreaker = func(string, int, string) (*circuitBreaker, error) { return nil, newErr }
+	if _, err := initializeServerCircuitBreaker(&Config{ServerPort: 3307}); !errors.Is(err, newErr) {
+		t.Fatalf("initializeServerCircuitBreaker() error = %v, want %v", err, newErr)
 	}
 }
 
