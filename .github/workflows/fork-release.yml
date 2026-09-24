@@ -1,0 +1,76 @@
+name: Fork release
+
+# Publishes a fork prerelease (vX.Y.Z-fd.N) from the tagged commit of this
+# fork. Upstream's release.yml is gated on gastownhall/beads, so it stays
+# dormant here. This job reuses the build steps and pinned actions of
+# upstream's "goreleaser" job in release.yml, then publishes the archives to
+# this repository's own release. The fork itself is described in FORK.md.
+
+on:
+  push:
+    tags:
+      - "v*-fd.*"
+
+permissions: {}
+
+concurrency:
+  group: fork-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # GitHub's own record decides: this job runs only in a fork.
+    if: ${{ github.event.repository.fork }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Install cross-compilation toolchains
+        timeout-minutes: 13
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64 gcc-aarch64-linux-gnu
+
+      - name: Install go-winres for Windows PE resource embedding
+        run: go install github.com/tc-hib/go-winres@latest
+
+      - name: Build with GoReleaser
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          # .goreleaser.yml names gastownhall/beads as its release target, so
+          # GoReleaser only builds here; the next step publishes to this fork.
+          args: release --clean --parallelism 1 --skip=publish --skip=announce
+
+      - name: Publish the fork prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(dist/*.tar.gz dist/*.zip dist/checksums.txt)
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --prerelease \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Fork build of upstream ${GITHUB_REF_NAME%-fd.*}. The product tree equals the upstream tag; see FORK.md for the fork plumbing."
+
+      - name: Attest release artifacts
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-checksums: dist/checksums.txt

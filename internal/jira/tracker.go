@@ -10,7 +10,6 @@ import (
 
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/debug"
-	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/tracker"
 	"github.com/steveyegge/beads/internal/types"
 )
@@ -24,7 +23,7 @@ func init() {
 // Tracker implements tracker.IssueTracker for Jira.
 type Tracker struct {
 	client           *Client
-	store            storage.Storage
+	store            tracker.Store
 	jiraURL          string
 	projectKeys      []string                          // one or more project keys (first is primary)
 	apiVersion       string                            // "2" or "3" (default: "3")
@@ -58,7 +57,7 @@ func (t *Tracker) Name() string         { return "jira" }
 func (t *Tracker) DisplayName() string  { return "Jira" }
 func (t *Tracker) ConfigPrefix() string { return "jira" }
 
-func (t *Tracker) Init(ctx context.Context, store storage.Storage) error {
+func (t *Tracker) Init(ctx context.Context, store tracker.Store) error {
 	t.store = store
 
 	jiraURL, err := t.getConfig(ctx, "jira.url", "JIRA_URL")
@@ -242,18 +241,6 @@ func (t *Tracker) CreateIssue(ctx context.Context, issue *types.Issue) (*tracker
 
 	// Set project to primary (first) project key.
 	fields["project"] = map[string]string{"key": t.PrimaryProjectKey()}
-
-	// Epic-link: when configured, nest every created issue under the project
-	// epic so the Jira mirror groups fleet work under one parent. Without
-	// this, created issues land outside the epic and the ledger cannot see
-	// them (external_ref is still written back by the sync engine).
-	epicKey, err := t.getConfig(ctx, "jira.epic_key", "JIRA_EPIC_KEY")
-	if err != nil {
-		return nil, err
-	}
-	if epicKey != "" {
-		fields["parent"] = map[string]string{"key": epicKey}
-	}
 
 	created, err := t.client.CreateIssue(ctx, fields)
 	if err != nil {

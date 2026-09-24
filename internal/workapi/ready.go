@@ -41,9 +41,7 @@ func LimitOr(limit *int, fallback int) int {
 // own to shape, and running it through here would change it.
 func BuildReadyFilter(in issueops.ReadyRequest) (types.WorkFilter, error) {
 	filter := types.WorkFilter{
-		// Open only, not in_progress - the same set `bd list --ready` shows
-		// when --status is omitted (an explicit --status is an intersection;
-		// GH#5832).
+		// Open only, not in_progress - the same set `bd list --ready` shows.
 		Status: types.StatusOpen,
 		Type:   utils.NormalizeIssueType(in.IssueType),
 		Limit:  LimitOr(in.Limit, DefaultReadyLimit),

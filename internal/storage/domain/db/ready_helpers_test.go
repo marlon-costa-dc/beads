@@ -8,13 +8,6 @@ import (
 	"github.com/steveyegge/beads/internal/types"
 )
 
-func derefInt(p *int) int {
-	if p == nil {
-		return 0
-	}
-	return *p
-}
-
 func (s *testSuite) resetDB() {
 	ctx := context.Background()
 	_, err := s.db.ExecContext(ctx, "CALL DOLT_RESET('--hard', ?)", s.baselineCommit)
@@ -217,8 +210,8 @@ func (s *testSuite) blockedExcludesClosed() {
 	s.Require().NoError(r.Insert(s.Ctx(), tgt, "tester", domain.InsertIssueOpts{}))
 	s.Require().NoError(dr.Insert(s.Ctx(),
 		newDep("bd-blc-src", "bd-blc-tgt", types.DepBlocks), "tester", domain.DepInsertOpts{}))
-	s.Require().NoError(r.Update(s.Ctx(), "bd-blc-src",
-		map[string]any{"status": string(types.StatusClosed)}, "tester", domain.IssueTableOpts{}))
+	_, err := r.Close(s.Ctx(), "bd-blc-src", domain.CloseRowParams{}, "tester", domain.IssueTableOpts{})
+	s.Require().NoError(err)
 
 	out, err := r.GetBlockedIssues(s.Ctx(), types.WorkFilter{})
 	s.Require().NoError(err)
@@ -237,8 +230,8 @@ func (s *testSuite) blockedUnblocksOnClose() {
 	s.Require().NoError(dr.Insert(s.Ctx(),
 		newDep("bd-bluc-src", "bd-bluc-tgt", types.DepBlocks), "tester", domain.DepInsertOpts{}))
 
-	s.Require().NoError(r.Update(s.Ctx(), "bd-bluc-tgt",
-		map[string]any{"status": string(types.StatusClosed)}, "tester", domain.IssueTableOpts{}))
+	_, err := r.Close(s.Ctx(), "bd-bluc-tgt", domain.CloseRowParams{}, "tester", domain.IssueTableOpts{})
+	s.Require().NoError(err)
 
 	out, err := r.GetBlockedIssues(s.Ctx(), types.WorkFilter{})
 	s.Require().NoError(err)
@@ -343,10 +336,12 @@ func (s *testSuite) statsEmpty() {
 	s.Equal(0, out.OpenIssues)
 	s.Equal(0, out.InProgressIssues)
 	s.Equal(0, out.ClosedIssues)
-	s.Equal(0, derefInt(out.BlockedIssues))
+	s.Require().NotNil(out.BlockedIssues)
+	s.Equal(0, *out.BlockedIssues)
 	s.Equal(0, out.DeferredIssues)
 	s.Equal(0, out.PinnedIssues)
-	s.Equal(0, derefInt(out.ReadyIssues))
+	s.Require().NotNil(out.ReadyIssues)
+	s.Equal(0, *out.ReadyIssues)
 }
 
 func (s *testSuite) statsCountsByStatus() {
@@ -385,7 +380,8 @@ func (s *testSuite) statsCountsBlocked() {
 
 	out, err := r.GetStatistics(s.Ctx())
 	s.Require().NoError(err)
-	s.Equal(1, derefInt(out.BlockedIssues))
+	s.Require().NotNil(out.BlockedIssues)
+	s.Equal(1, *out.BlockedIssues)
 }
 
 func (s *testSuite) statsCountsPinned() {
@@ -413,8 +409,10 @@ func (s *testSuite) statsReadyDerived() {
 	out, err := r.GetStatistics(s.Ctx())
 	s.Require().NoError(err)
 	s.Equal(3, out.OpenIssues)
-	s.Equal(1, derefInt(out.BlockedIssues))
-	s.Equal(2, derefInt(out.ReadyIssues), "ready = open - blocked")
+	s.Require().NotNil(out.BlockedIssues)
+	s.Equal(1, *out.BlockedIssues)
+	s.Require().NotNil(out.ReadyIssues)
+	s.Equal(2, *out.ReadyIssues, "ready = open - blocked")
 }
 
 func (s *testSuite) statsReadyClamped() {
@@ -428,7 +426,8 @@ func (s *testSuite) statsReadyClamped() {
 
 	out, err := r.GetStatistics(s.Ctx())
 	s.Require().NoError(err)
-	s.GreaterOrEqual(derefInt(out.ReadyIssues), 0, "ready must never go negative")
+	s.Require().NotNil(out.ReadyIssues)
+	s.GreaterOrEqual(*out.ReadyIssues, 0, "ready must never go negative")
 }
 
 // ---------- DetectCycles ----------
@@ -464,11 +463,12 @@ func (s *testSuite) cyclesTwoNode() {
 	for _, id := range []string{"bd-cy2-a", "bd-cy2-b"} {
 		s.Require().NoError(r.Insert(s.Ctx(), newTestIssue(id, id), "tester", domain.InsertIssueOpts{}))
 	}
-	// Repo-level Insert bypasses the use-case cycle check, so we can plant a cycle directly.
+	// Explicit CycleValidated bypasses the defensive repository check so this
+	// legacy-cycle reporting test can plant a cycle directly.
 	s.Require().NoError(dr.Insert(s.Ctx(),
 		newDep("bd-cy2-a", "bd-cy2-b", types.DepBlocks), "tester", domain.DepInsertOpts{}))
 	s.Require().NoError(dr.Insert(s.Ctx(),
-		newDep("bd-cy2-b", "bd-cy2-a", types.DepBlocks), "tester", domain.DepInsertOpts{}))
+		newDep("bd-cy2-b", "bd-cy2-a", types.DepBlocks), "tester", domain.DepInsertOpts{CycleValidated: true}))
 
 	out, err := dr.DetectCycles(s.Ctx())
 	s.Require().NoError(err)
@@ -490,7 +490,7 @@ func (s *testSuite) cyclesThreeNode() {
 	s.Require().NoError(dr.Insert(s.Ctx(),
 		newDep("bd-cy3-b", "bd-cy3-c", types.DepBlocks), "tester", domain.DepInsertOpts{}))
 	s.Require().NoError(dr.Insert(s.Ctx(),
-		newDep("bd-cy3-c", "bd-cy3-a", types.DepBlocks), "tester", domain.DepInsertOpts{}))
+		newDep("bd-cy3-c", "bd-cy3-a", types.DepBlocks), "tester", domain.DepInsertOpts{CycleValidated: true}))
 
 	out, err := dr.DetectCycles(s.Ctx())
 	s.Require().NoError(err)
@@ -512,7 +512,7 @@ func (s *testSuite) cyclesIgnoresParentChild() {
 	s.Require().NoError(dr.Insert(s.Ctx(),
 		newDep("bd-cypc-a", "bd-cypc-b", types.DepParentChild), "tester", domain.DepInsertOpts{}))
 	s.Require().NoError(dr.Insert(s.Ctx(),
-		newDep("bd-cypc-b", "bd-cypc-a", types.DepParentChild), "tester", domain.DepInsertOpts{}))
+		newDep("bd-cypc-b", "bd-cypc-a", types.DepParentChild), "tester", domain.DepInsertOpts{CycleValidated: true}))
 
 	out, err := dr.DetectCycles(s.Ctx())
 	s.Require().NoError(err)
@@ -529,7 +529,7 @@ func (s *testSuite) cyclesConditionalBlocks() {
 	s.Require().NoError(dr.Insert(s.Ctx(),
 		newDep("bd-cycb-a", "bd-cycb-b", types.DepConditionalBlocks), "tester", domain.DepInsertOpts{}))
 	s.Require().NoError(dr.Insert(s.Ctx(),
-		newDep("bd-cycb-b", "bd-cycb-a", types.DepBlocks), "tester", domain.DepInsertOpts{}))
+		newDep("bd-cycb-b", "bd-cycb-a", types.DepBlocks), "tester", domain.DepInsertOpts{CycleValidated: true}))
 
 	out, err := dr.DetectCycles(s.Ctx())
 	s.Require().NoError(err)

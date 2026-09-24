@@ -12,7 +12,7 @@ import (
 // format. Its contents are the authoritative runtime reference for the
 // error-message-no-echo invariant: refusal texts point here rather than
 // constructing copy-pasteable destructive invocations. See
-// docs/adr/0002-init-safety-invariants.md.
+// engdocs/adr/0002-init-safety-invariants.md.
 var initSafetyHelpCmd = &cobra.Command{
 	Use:   "init-safety",
 	Short: "Explain bd init flag semantics and the destroy-token format",
@@ -70,7 +70,7 @@ DESTROY-TOKEN (non-interactive only)
   In interactive (TTY) mode you confirm via a typed prompt instead. The
   token is not echoed by bd's runtime error messages — this is a
   deliberate guard against pattern-matched one-liners (see
-  docs/adr/0002-init-safety-invariants.md).
+  engdocs/adr/0002-init-safety-invariants.md).
 
 EXIT CODES
 
@@ -80,11 +80,12 @@ EXIT CODES
         (interactive mode only)
   12    refused: destructive re-init (--discard-remote, or --reinit-local
         over existing issues) without a valid --destroy-token
-        (non-interactive mode)
+        (non-interactive mode); also returned when the interactive
+        --discard-remote typed-token confirmation is declined
 
 RECOVERY
 
-  If you hit a refusal, see docs/RECOVERY.md for step-by-step recovery
+  If you hit a refusal, see docs/recovery/init-safety.md for step-by-step recovery
   playbooks for each exit code.
 `,
 	Run: func(cmd *cobra.Command, _ []string) {
