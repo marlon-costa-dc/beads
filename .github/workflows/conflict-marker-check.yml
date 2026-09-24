@@ -24,16 +24,17 @@ jobs:
 
           # git grep exits 0 (matches found) or 1 (no match); anything higher
           # is a real error (bad pattern, corrupt index, ...) and must fail
-          # the job rather than be swallowed into an empty result.
-          opening=$(grep_markers '^<<<<<<< ')
-          rc=$?
+          # the job rather than be swallowed into an empty result. The step
+          # shell runs with errexit (bash -e), so the status is captured
+          # inside the `if` condition, where a non-zero exit does not abort
+          # the step before it can be classified.
+          if opening=$(grep_markers '^<<<<<<< '); then rc=0; else rc=$?; fi
           if [ "$rc" -gt 1 ]; then
             echo "::error::git grep failed scanning for opening conflict markers (exit $rc)" >&2
             exit "$rc"
           fi
 
-          closing=$(grep_markers '^>>>>>>> ')
-          rc=$?
+          if closing=$(grep_markers '^>>>>>>> '); then rc=0; else rc=$?; fi
           if [ "$rc" -gt 1 ]; then
             echo "::error::git grep failed scanning for closing conflict markers (exit $rc)" >&2
             exit "$rc"
