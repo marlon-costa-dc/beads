@@ -5,7 +5,9 @@ on:
     # release/** is here because release-prep and release-fix PRs are based on
     # the release branch, not on main. Without it they run almost no CI and the
     # first full signal is the tag build, where a failure burns the tag.
-    branches: [ main, 'release/**' ]
+    # dc-use is this fork's integration branch; trigger filters cannot read
+    # repository variables, so it is named here.
+    branches: [ main, 'release/**', dc-use ]
   merge_group:
 
 concurrency:

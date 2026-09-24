@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
   merge_group:
   push:
-    branches: [main]
+    branches: [main, dc-use]
     paths:
       - 'cmd/bd/proxied_local_*'
       - 'cmd/bd/proxied_server*.go'

@@ -11,7 +11,7 @@ on:
       - 'overlay.nix'
       - 'packages.nix'
   push:
-    branches: [main]
+    branches: [main, dc-use]
     paths:
       - 'go.mod'
       - 'go.sum'
