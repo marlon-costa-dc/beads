@@ -1,11 +1,11 @@
 name: Regression Tests
 
 on:
-  # Run on merges to main
+  # Run on merges to main (and to dc-use, this fork's integration branch)
   push:
-    branches: [main]
+    branches: [main, dc-use]
   pull_request:
-    branches: [main, 'release/**']
+    branches: [main, 'release/**', dc-use]
   # Allow manual trigger
   workflow_dispatch:
 
