@@ -189,8 +189,7 @@ var configSetCmd = &cobra.Command{
 			} else {
 				fmt.Printf("Set %s = %s (in %s)\n", key, value, location)
 			}
-			printConfigSideEffects(checkConfigSetSideEffects(key, value))
-			return nil
+			return reportConfigSideEffects(checkConfigSetSideEffects(beads.FindBeadsDir(), key, value))
 		}
 
 		if key == "beads.role" {
@@ -240,8 +239,7 @@ var configSetCmd = &cobra.Command{
 		} else {
 			fmt.Printf("Set %s = %s\n", result.Key, result.Value)
 		}
-		printConfigSideEffects(checkConfigSetSideEffects(result.Key, result.Value))
-		return nil
+		return reportConfigSideEffects(checkConfigSetSideEffects(beads.FindBeadsDir(), result.Key, result.Value))
 	},
 }
 
@@ -591,8 +589,7 @@ var configUnsetCmd = &cobra.Command{
 			} else {
 				fmt.Printf("Unset %s (in %s)\n", key, location)
 			}
-			printConfigSideEffects(checkConfigUnsetSideEffects(key))
-			return nil
+			return reportConfigSideEffects(checkConfigUnsetSideEffects(beads.FindBeadsDir(), key))
 		}
 
 		if key == "beads.role" {
@@ -632,8 +629,7 @@ var configUnsetCmd = &cobra.Command{
 		} else {
 			fmt.Printf("Unset %s\n", result.Key)
 		}
-		printConfigSideEffects(checkConfigUnsetSideEffects(result.Key))
-		return nil
+		return reportConfigSideEffects(checkConfigUnsetSideEffects(beads.FindBeadsDir(), result.Key))
 	},
 }
 

@@ -1,7 +1,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -258,6 +260,12 @@ func Initialize() error {
 	// Controls whether beads should automatically create Dolt commits after write commands.
 	// Values: off | on
 	v.SetDefault("dolt.auto-commit", "on")
+
+	// Gas City lifecycle commands printed when the city owns a store's Dolt
+	// server (see gascity.go).
+	for key, command := range gasCityCommandDefaults {
+		v.SetDefault(key, command)
+	}
 
 	// Routing configuration defaults
 	v.SetDefault("routing.mode", "")
@@ -687,42 +695,75 @@ func GetString(key string) string {
 // This is intended for library consumers that call NewFromConfigWithOptions
 // without first invoking config.Initialize().
 //
-// The key uses dotted notation (e.g. "dolt.auto-start"). YAML booleans and
-// numbers are coerced to their string representations ("true", "false", etc.).
-// Returns "" if the file is absent, the key is not found, or any error occurs.
+// The key uses dotted notation (e.g. "dolt.auto-start"); see
+// LookupStringFromDir for the accepted YAML shapes. YAML booleans and numbers
+// are coerced to their string representations ("true", "false", etc.).
+// Returns "" if the file is absent, the key is not found, or any error occurs;
+// callers whose decision must not treat a broken file as an absent key use
+// LookupStringFromDir instead.
 func GetStringFromDir(beadsDir, key string) string {
-	configPath := filepath.Join(beadsDir, "config.yaml")
-	data, err := os.ReadFile(configPath)
+	value, _, err := LookupStringFromDir(beadsDir, key)
 	if err != nil {
 		return ""
 	}
+	return value
+}
+
+// LookupStringFromDir reads a single scalar configuration value directly from
+// <beadsDir>/config.yaml without using or modifying global viper state.
+//
+// Like viper, the lookup accepts both a nested mapping
+// (`dolt: {auto-start: false}`) and a flat dotted key
+// (`gc.endpoint_origin: inherited_city`, the form Gas City stamps): at every
+// level the longest remaining key is tried verbatim before descending one
+// segment. YAML booleans and numbers are coerced to their string
+// representations; an explicit YAML null is a present, empty value.
+//
+// found is false with a nil error only when the file does not exist or the key
+// is absent. Any other read failure, malformed YAML, or a key whose path runs
+// through or ends at a non-scalar node is returned as an error.
+func LookupStringFromDir(beadsDir, key string) (value string, found bool, err error) {
+	configPath := filepath.Join(beadsDir, "config.yaml")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("reading %s: %w", configPath, err)
+	}
 	var root map[string]interface{}
 	if err := yaml.Unmarshal(data, &root); err != nil {
-		return ""
+		return "", false, fmt.Errorf("parsing %s: %w", configPath, err)
 	}
-	parts := strings.SplitN(key, ".", 2)
 	node := root
-	for len(parts) == 2 {
-		val, ok := node[parts[0]]
-		if !ok {
-			return ""
+	rest := key
+	for {
+		if val, ok := node[rest]; ok {
+			switch s := val.(type) {
+			case nil:
+				return "", true, nil
+			case string:
+				return s, true, nil
+			case map[string]interface{}, []interface{}:
+				return "", false, fmt.Errorf("%s in %s is not a scalar value", key, configPath)
+			default:
+				return fmt.Sprintf("%v", s), true, nil
+			}
 		}
-		m, ok := val.(map[string]interface{})
+		head, tail, cut := strings.Cut(rest, ".")
+		if !cut {
+			return "", false, nil
+		}
+		next, ok := node[head]
 		if !ok {
-			return ""
+			return "", false, nil
+		}
+		m, ok := next.(map[string]interface{})
+		if !ok {
+			return "", false, fmt.Errorf("%s in %s: %q is not a mapping", key, configPath, head)
 		}
 		node = m
-		parts = strings.SplitN(parts[1], ".", 2)
-	}
-	val, ok := node[parts[0]]
-	if !ok {
-		return ""
-	}
-	switch s := val.(type) {
-	case string:
-		return s
-	default:
-		return fmt.Sprintf("%v", s)
+		rest = tail
 	}
 }
 
