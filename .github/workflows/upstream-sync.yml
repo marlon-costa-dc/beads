@@ -1,0 +1,98 @@
+name: Upstream topology audit
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      apply_main:
+        description: Atomically update fork main to the audited upstream main commit
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: upstream-topology
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  require-fork-config:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require fork topology variables
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "${{ vars.FORK_REPOSITORY }}" ] || missing+=("FORK_REPOSITORY")
+          [ -n "${{ vars.UPSTREAM_REPOSITORY }}" ] || missing+=("UPSTREAM_REPOSITORY")
+          [ -n "${{ vars.FORK_INTEGRATION_BRANCH }}" ] || missing+=("FORK_INTEGRATION_BRANCH")
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::missing repository variable(s): ${missing[*]}" >&2
+            exit 1
+          fi
+
+  audit:
+    needs: require-fork-config
+    if: github.repository == vars.FORK_REPOSITORY
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork integration branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          ref: ${{ vars.FORK_INTEGRATION_BRANCH }}
+          fetch-depth: 0
+
+      - name: Fetch canonical upstream and fork topology
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_REPOSITORY: ${{ vars.UPSTREAM_REPOSITORY }}
+          FORK_INTEGRATION_BRANCH: ${{ vars.FORK_INTEGRATION_BRANCH }}
+        run: |
+          set -euo pipefail
+          git remote add canonical "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          git fetch --no-tags canonical main
+          git fetch --tags canonical
+          git fetch --no-tags origin main "$FORK_INTEGRATION_BRANCH"
+
+          upstream_main=$(git rev-parse canonical/main)
+          fork_main=$(git rev-parse origin/main)
+          latest_tag=$(gh api "repos/${UPSTREAM_REPOSITORY}/releases/latest" --jq .tag_name)
+          latest_release=$(git rev-parse "refs/tags/$latest_tag^{}")
+          # Fork bases are upstream release tags merged into the integration
+          # branch: the integration branch must contain the latest stable
+          # upstream release as an ancestor, never a branch-tip commit.
+          integration_base=$(git merge-base "origin/$FORK_INTEGRATION_BRANCH" "$latest_release")
+
+          {
+            echo "upstream_main=$upstream_main"
+            echo "fork_main=$fork_main"
+            echo "latest_tag=$latest_tag"
+            echo "latest_release=$latest_release"
+            echo "integration_branch=$FORK_INTEGRATION_BRANCH"
+            echo "integration_base=$integration_base"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$integration_base" != "$latest_release" ]]; then
+            echo "$FORK_INTEGRATION_BRANCH is not based on the latest stable upstream release ($latest_tag) — drift detected" >&2
+            exit 1
+          fi
+
+          if [[ "$fork_main" == "$upstream_main" ]]; then
+            echo "main already mirrors canonical upstream" >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # De Morgan's negation of (workflow_dispatch && apply_main == true);
+          # the || below is intentional, not a mistaken &&.
+          # shellcheck disable=SC2055
+          if [[ "${{ github.event_name }}" != workflow_dispatch || "${{ inputs.apply_main }}" != true ]]; then
+            echo "main drift detected; rerun manually with apply_main=true after review" >&2
+            exit 1
+          fi
+
+          git push origin "$upstream_main:refs/heads/main" \
+            --force-with-lease="refs/heads/main:$fork_main"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$upstream_main"
