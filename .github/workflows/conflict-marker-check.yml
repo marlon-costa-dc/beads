@@ -1,0 +1,48 @@
+name: conflict-marker-check
+
+on:
+  pull_request:
+
+jobs:
+  conflict-markers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - name: Check for merge conflict markers
+        run: |
+          set -uo pipefail
+          # A conflict leaves an opening marker and a closing marker in the
+          # same file. Matching a bare "=======" line alone flagged SQL,
+          # shell and Markdown separators fleet-wide (false red on every PR),
+          # so a file is reported only when it carries both real markers.
+          excludes=":(exclude)**/.venv/** :(exclude)**/node_modules/** :(exclude)**/dist/** :(exclude)**/build/** :(exclude)**/.cache/** :(exclude)**/_vendor/**"
+
+          # shellcheck disable=SC2086
+          grep_markers() {
+            git grep -l -E "$1" -- . $excludes
+          }
+
+          # git grep exits 0 (matches found) or 1 (no match); anything higher
+          # is a real error (bad pattern, corrupt index, ...) and must fail
+          # the job rather than be swallowed into an empty result.
+          opening=$(grep_markers '^<<<<<<< ')
+          rc=$?
+          if [ "$rc" -gt 1 ]; then
+            echo "::error::git grep failed scanning for opening conflict markers (exit $rc)" >&2
+            exit "$rc"
+          fi
+
+          closing=$(grep_markers '^>>>>>>> ')
+          rc=$?
+          if [ "$rc" -gt 1 ]; then
+            echo "::error::git grep failed scanning for closing conflict markers (exit $rc)" >&2
+            exit "$rc"
+          fi
+
+          markers=$(comm -12 <(printf '%s\n' "$opening" | sort -u) <(printf '%s\n' "$closing" | sort -u) | sed '/^$/d')
+          if [ -n "$markers" ]; then
+            echo "::error::Merge conflict markers found in tracked files:"
+            echo "$markers"
+            exit 1
+          fi
+          echo "No conflict markers found."
