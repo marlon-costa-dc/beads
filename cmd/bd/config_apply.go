@@ -425,7 +425,17 @@ func applyServer(drifted bool, dryRun bool) ApplyResult {
 	// Reconciliation must honor the same auto-start policy as implicit storage
 	// opens. A disabled auto-start means the server is externally managed; keep
 	// Action="start" to describe the skipped reconciliation action consistently.
-	if doltserver.IsAutoStartDisabled() {
+	autoStartDisabled, err := doltserver.IsAutoStartDisabled(beadsDir)
+	if err != nil {
+		return ApplyResult{
+			Check:   "server",
+			Action:  "start",
+			Status:  applyStatusError,
+			Message: "Cannot resolve Dolt server ownership",
+			Error:   err.Error(),
+		}
+	}
+	if autoStartDisabled {
 		return ApplyResult{
 			Check:   "server",
 			Action:  "start",

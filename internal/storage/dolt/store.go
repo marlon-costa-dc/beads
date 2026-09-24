@@ -1775,6 +1775,12 @@ func newServerMode(ctx context.Context, cfg *Config) (*DoltStore, error) {
 		conn, dialErr = net.DialTimeout("tcp", addr, 500*time.Millisecond)
 	}
 	if dialErr != nil {
+		// The manual start advice names the city's command when Gas City owns
+		// this store's server; an unreadable ownership stamp fails the open.
+		startHint, hintErr := doltserver.StartHint(resolvedBeadsDir)
+		if hintErr != nil {
+			return nil, fmt.Errorf("Dolt server unreachable at %s: %w", addr, errors.Join(dialErr, hintErr))
+		}
 		// Auto-start: if enabled and connecting locally via TCP, start a server.
 		// Socket mode is excluded — auto-start creates a TCP listener, not a
 		// unix socket, so the DSN would still fail. Socket users are expected
@@ -1801,9 +1807,9 @@ func newServerMode(ctx context.Context, cfg *Config) (*DoltStore, error) {
 			port, startedByUs, startErr := ensureRunningDetailed(resolvedBeadsDir)
 			if startErr != nil {
 				return nil, fmt.Errorf("Dolt server unreachable at %s and auto-start failed: %w\n\n"+
-					"To start manually: bd dolt start\n"+
+					"To start manually: %s\n"+
 					"To disable auto-start: set dolt.auto-start: false in .beads/config.yaml",
-					addr, startErr)
+					addr, startErr, startHint)
 			}
 			// Only tests should stop auto-started servers on Close(). In normal
 			// repo-local server mode, leaving the server up avoids endpoint churn
@@ -1903,6 +1909,10 @@ func newServerMode(ctx context.Context, cfg *Config) (*DoltStore, error) {
 			if breaker != nil {
 				breaker.RecordFailure()
 			}
+			autoStartDisabled, err := doltserver.IsAutoStartDisabled(resolvedBeadsDir)
+			if err != nil {
+				return nil, fmt.Errorf("Dolt server unreachable at %s: %w", addr, errors.Join(dialErr, err))
+			}
 			var hint string
 			if cfg.ServerSocket != "" {
 				hint = fmt.Sprintf("The Dolt server is not listening on socket %s.\n"+
@@ -1921,11 +1931,11 @@ func newServerMode(ctx context.Context, cfg *Config) (*DoltStore, error) {
 					cfg.ServerHost, cfg.ServerPort,
 					cfg.ServerHost, cfg.ServerPort,
 					cfg.ServerHost, cfg.ServerPort)
-			} else if !cfg.AutoStart && doltserver.IsAutoStartDisabled() {
-				hint = "Dolt server auto-start is disabled (dolt.auto-start: false).\n" +
-					"Start the server manually:\n  bd dolt start"
+			} else if !cfg.AutoStart && autoStartDisabled {
+				hint = "Dolt server auto-start is disabled (dolt.auto-start: false, or the store's server is owned by Gas City).\n" +
+					"Start the server manually:\n  " + startHint
 			} else {
-				hint = "The Dolt server may not be running. Try:\n  bd dolt start"
+				hint = "The Dolt server may not be running. Try:\n  " + startHint
 			}
 			return nil, fmt.Errorf("Dolt server unreachable at %s: %w\n\n%s",
 				addr, dialErr, hint)
@@ -2603,8 +2613,17 @@ func openServerConnection(ctx context.Context, cfg *Config) (*sql.DB, string, se
 			if !strings.Contains(errLower, "database exists") && !strings.Contains(errLower, "1007") {
 				// Check for connection refused - server likely not running
 				if strings.Contains(errLower, "connection refused") || strings.Contains(errLower, "connect: connection refused") {
-					return nil, "", serverConnFacts{}, fmt.Errorf("failed to connect to Dolt server at %s:%d: %w\n\nThe Dolt server may not be running. Try:\n  bd dolt start    # Start a local server\n  gt dolt start    # If using an orchestrator",
-						cfg.ServerHost, cfg.ServerPort, err)
+					beadsDir := cfg.BeadsDir
+					if beadsDir == "" {
+						beadsDir = filepath.Dir(cfg.Path) // cfg.Path is .beads/dolt → parent is .beads/
+					}
+					startHint, hintErr := doltserver.StartHint(beadsDir)
+					if hintErr != nil {
+						return nil, "", serverConnFacts{}, fmt.Errorf("failed to connect to Dolt server at %s:%d: %w",
+							cfg.ServerHost, cfg.ServerPort, errors.Join(err, hintErr))
+					}
+					return nil, "", serverConnFacts{}, fmt.Errorf("failed to connect to Dolt server at %s:%d: %w\n\nThe Dolt server may not be running. Try:\n  %s",
+						cfg.ServerHost, cfg.ServerPort, err, startHint)
 				}
 				return nil, "", serverConnFacts{}, fmt.Errorf("failed to create database: %w", err)
 			}

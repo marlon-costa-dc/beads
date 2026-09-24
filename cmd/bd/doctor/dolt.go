@@ -3,6 +3,7 @@ package doctor
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -10,12 +11,27 @@ import (
 	// MySQL driver for connecting to dolt sql-server
 	_ "github.com/go-sql-driver/mysql"
 
+	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/doltserver"
 
 	"github.com/steveyegge/beads/internal/storage/dolt"
 	"github.com/steveyegge/beads/internal/storage/doltutil"
 )
+
+// doltOwnershipCheck reports, as the named check's error, a store whose Gas
+// City ownership stamp (gc.endpoint_origin) cannot be read or is invalid, so
+// no lifecycle command can be recommended for it.
+func doltOwnershipCheck(name, category string, err error) DoctorCheck {
+	return DoctorCheck{
+		Name:     name,
+		Status:   StatusError,
+		Message:  "Cannot resolve Dolt server ownership",
+		Detail:   err.Error(),
+		Fix:      fmt.Sprintf("Correct %s in the store's config.yaml", config.GasCityEndpointOriginKey),
+		Category: category,
+	}
+}
 
 // openDoltDB opens a connection to the Dolt SQL server via MySQL protocol.
 func openDoltDB(beadsDir string) (*sql.DB, *configfile.Config, error) {
@@ -161,8 +177,14 @@ func runDoltHealthChecksInternal(path string) []DoctorCheck {
 		// External/shared server mode: a server is expected to be running,
 		// so connection failure is a real error.
 		connErr := err.Error()
+		connCheck := DoctorCheck{Name: "Dolt Connection", Status: StatusError, Message: "Failed to connect to Dolt server", Detail: connErr, Category: CategoryCore}
+		if startHint, hintErr := doltserver.StartHint(beadsDir); hintErr != nil {
+			connCheck = doltOwnershipCheck("Dolt Connection", CategoryCore, errors.Join(err, hintErr))
+		} else {
+			connCheck.Fix = fmt.Sprintf("Start the server with '%s', or check server host/port configuration", startHint)
+		}
 		return []DoctorCheck{
-			{Name: "Dolt Connection", Status: StatusError, Message: "Failed to connect to Dolt server", Detail: connErr, Fix: "Ensure dolt sql-server is running, or check server host/port configuration", Category: CategoryCore},
+			connCheck,
 			{Name: "Dolt Schema", Status: StatusError, Message: "Skipped (no connection)", Detail: connErr, Category: CategoryCore},
 			{Name: "Dolt Issue Count", Status: StatusError, Message: "Skipped (no connection)", Detail: connErr, Category: CategoryData},
 			{Name: "Dolt Status", Status: StatusError, Message: "Skipped (no connection)", Detail: connErr, Category: CategoryData},
@@ -231,12 +253,16 @@ func CheckDoltConnection(path string) DoctorCheck {
 
 	conn, err := openDoltConn(beadsDir)
 	if err != nil {
+		startHint, hintErr := doltserver.StartHint(beadsDir)
+		if hintErr != nil {
+			return doltOwnershipCheck("Dolt Connection", CategoryCore, errors.Join(err, hintErr))
+		}
 		return DoctorCheck{
 			Name:     "Dolt Connection",
 			Status:   StatusError,
 			Message:  "Failed to connect to Dolt server",
 			Detail:   err.Error(),
-			Fix:      "Ensure dolt sql-server is running",
+			Fix:      fmt.Sprintf("Start the server with '%s'", startHint),
 			Category: CategoryCore,
 		}
 	}
@@ -720,12 +746,16 @@ func checkSharedServerHealth(beadsDir string) DoctorCheck {
 	}
 
 	if state == nil || !state.Running {
+		startHint, err := doltserver.StartHint(beadsDir)
+		if err != nil {
+			return doltOwnershipCheck("Shared Server", CategoryRuntime, err)
+		}
 		return DoctorCheck{
 			Name:     "Shared Server",
 			Status:   StatusWarning,
 			Message:  "Shared server not running (will auto-start on next bd command)",
 			Detail:   fmt.Sprintf("Server directory: %s", sharedDir),
-			Fix:      "Run 'bd dolt start' to start the shared server",
+			Fix:      fmt.Sprintf("Run '%s' to start the shared server", startHint),
 			Category: CategoryRuntime,
 		}
 	}
