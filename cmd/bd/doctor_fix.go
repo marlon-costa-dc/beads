@@ -372,8 +372,7 @@ func applyFixList(path string, fixes []doctorCheck) {
 		case "Lock Files":
 			err = fix.StaleLockFiles(path)
 		case "Circuit Breaker":
-			dolt.CleanStaleCircuitBreakerFiles()
-			fmt.Printf("  %s Cleared stale circuit breaker files\n", ui.RenderPass("✓"))
+			err = dolt.CleanStaleCircuitBreakerFiles()
 		case "Fresh Clone":
 			err = fix.FreshCloneImport(path, Version)
 		case "Pending Migrations":

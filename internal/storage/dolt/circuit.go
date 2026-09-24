@@ -77,8 +77,9 @@ type circuitState struct {
 // degradation in one project from tripping the breaker for all worktrees
 // sharing the same server (GH#3140).
 //
-// It uses a file under os.TempDir() for cross-process state sharing and an in-process
-// mutex for thread safety within a single process.
+// It uses a file in the user's cache directory (CircuitBreakerDir) for
+// cross-process state sharing and an in-process mutex for thread safety within
+// a single process.
 type circuitBreaker struct {
 	host     string
 	port     int
@@ -95,21 +96,29 @@ var ErrCircuitOpen = fmt.Errorf("dolt circuit breaker is open: server appears do
 // and sharing breaker state on port 0 poisons every fresh init on the machine.
 // The database parameter scopes the breaker to a specific project so that
 // degradation in one database doesn't trip the breaker for others (GH#3140).
-func maybeNewCircuitBreaker(host string, port int, database string) *circuitBreaker {
+func maybeNewCircuitBreaker(host string, port int, database string) (*circuitBreaker, error) {
 	if port <= 0 {
-		return nil
+		return nil, nil
 	}
 	return newCircuitBreaker(host, port, database)
 }
 
-// circuitBreakerDir returns the dedicated directory for circuit breaker state
-// files. Using a subdirectory avoids scanning all of the temp root (which may
-// contain millions of entries) when cleaning up stale breaker files on
-// startup. Derived from os.TempDir() so it is correct on every platform:
-// hardcoding "/tmp" resolved to C:\tmp on Windows, silently accumulating
-// breaker files there forever (GH#4636).
-func circuitBreakerDir() string {
-	return filepath.Join(os.TempDir(), "beads-circuit")
+// CircuitBreakerDir returns the dedicated directory for circuit breaker state.
+// Breaker files coordinate independent bd processes and outlive any single
+// invocation, so the system temporary directory is the wrong lifecycle owner:
+// the state lives under the user's cache directory, which every platform
+// resolves (XDG_CACHE_HOME or ~/.cache, ~/Library/Caches, %LocalAppData%).
+// An unresolvable or relative cache directory is an error, never a silent
+// substitute location.
+func CircuitBreakerDir() (string, error) {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve user cache directory for circuit breaker state: %w", err)
+	}
+	if !filepath.IsAbs(cacheDir) {
+		return "", fmt.Errorf("user cache directory for circuit breaker state is not absolute: %q", cacheDir)
+	}
+	return filepath.Join(cacheDir, "beads", "circuit"), nil
 }
 
 const (
@@ -120,17 +129,21 @@ const (
 // circuitBreakerPaths returns production paths unless the test harness provides
 // a suite-owned circuit directory. The override redirects both current and
 // legacy state even when an individual test temporarily unsets BEADS_TEST_MODE.
-func circuitBreakerPaths() (dir, legacyFile string) {
+func circuitBreakerPaths() (dir, legacyFile string, err error) {
 	if testDir := filepath.Clean(os.Getenv(testCircuitBreakerDirEnv)); filepath.IsAbs(testDir) {
-		return testDir, filepath.Join(testDir, "beads-dolt-circuit-0.json")
+		return testDir, filepath.Join(testDir, "beads-dolt-circuit-0.json"), nil
 	}
-	return circuitBreakerDir(), legacyCircuitBreakerFile
+	dir, err = CircuitBreakerDir()
+	if err != nil {
+		return "", "", err
+	}
+	return dir, legacyCircuitBreakerFile, nil
 }
 
 // newCircuitBreaker creates a circuit breaker for the given Dolt server
 // host:port:database. The database name is included in the file path so each
 // project gets independent circuit breaker state on shared servers (GH#3140).
-func newCircuitBreaker(host string, port int, database string) *circuitBreaker {
+func newCircuitBreaker(host string, port int, database string) (*circuitBreaker, error) {
 	// Sanitize host and database for use in filename
 	sanitize := strings.NewReplacer(".", "-", ":", "-", "/", "-")
 	safeHost := sanitize.Replace(host)
@@ -147,14 +160,19 @@ func newCircuitBreaker(host string, port int, database string) *circuitBreaker {
 		filename = fmt.Sprintf("beads-dolt-circuit-%s-%d.json", safeHost, port)
 	}
 
-	dir, _ := circuitBreakerPaths()
-	_ = os.MkdirAll(dir, 0755)
+	dir, _, err := circuitBreakerPaths()
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, fmt.Errorf("create circuit breaker state directory %s: %w", dir, err)
+	}
 	return &circuitBreaker{
 		host:     host,
 		port:     port,
 		database: database,
 		filePath: filepath.Join(dir, filename),
-	}
+	}, nil
 }
 
 // Allow checks whether a request should be allowed through.
@@ -364,9 +382,13 @@ func (cb *circuitBreaker) writeState(state circuitState) {
 //   - Legacy port-0 files (beads-dolt-circuit-0.json) from before the port-0 fix
 //   - Any breaker file whose open/half-open state is older than circuitStaleTTL
 //
-// Called during init to ensure a clean starting state (GH#2598).
-func CleanStaleCircuitBreakerFiles() {
-	dir, legacyFile := circuitBreakerPaths()
+// Called during init to ensure a clean starting state (GH#2598). An
+// unresolvable or uncreatable live directory is returned as an error.
+func CleanStaleCircuitBreakerFiles() error {
+	dir, legacyFile, err := circuitBreakerPaths()
+	if err != nil {
+		return err
+	}
 
 	// Remove the legacy port-0 file that lived directly in the temp root before
 	// the subdirectory move (GH#2598). Best-effort: remove from the resolved
@@ -381,7 +403,9 @@ func CleanStaleCircuitBreakerFiles() {
 	// Clean stale files in the dedicated subdirectory (fast — typically 0-2
 	// files). Only open/half-open state past circuitStaleTTL is removed here;
 	// closed files are left alone since a live server keeps writing them.
-	_ = os.MkdirAll(dir, 0755)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("create circuit breaker state directory %s: %w", dir, err)
+	}
 	cleanStaleCircuitBreakerFilesIn(dir, false)
 
 	// Also sweep the legacy hardcoded "/tmp/beads-circuit" location
@@ -399,6 +423,7 @@ func CleanStaleCircuitBreakerFiles() {
 			cleanStaleCircuitBreakerFilesIn(legacy, true)
 		}
 	}
+	return nil
 }
 
 // cleanStaleCircuitBreakerFilesIn is the testable implementation of

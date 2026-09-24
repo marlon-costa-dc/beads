@@ -25,7 +25,11 @@ func TestCircuitBreaker_InitiallyAllows(t *testing.T) {
 }
 
 func TestMaybeNewCircuitBreaker_PortZeroDisabled(t *testing.T) {
-	if cb := maybeNewCircuitBreaker("127.0.0.1", 0, "test"); cb != nil {
+	cb, err := maybeNewCircuitBreaker("127.0.0.1", 0, "test")
+	if err != nil {
+		t.Fatalf("maybeNewCircuitBreaker(0) error = %v", err)
+	}
+	if cb != nil {
 		t.Fatalf("maybeNewCircuitBreaker(0) = %#v, want nil", cb)
 	}
 }
@@ -226,8 +230,8 @@ func TestCircuitBreaker_DifferentHostsSeparateState(t *testing.T) {
 	t.Setenv("BEADS_TEST_MODE", "")
 	// Two breakers for the same port but different hosts should have independent state.
 	// This is the core fix: previously keyed on port only, which caused cross-host blocking.
-	cb1 := newCircuitBreaker("127.0.0.1", 99999, "")
-	cb2 := newCircuitBreaker("10.0.0.1", 99999, "")
+	cb1 := mustNewCircuitBreaker(t, "127.0.0.1", 99999, "")
+	cb2 := mustNewCircuitBreaker(t, "10.0.0.1", 99999, "")
 	t.Cleanup(func() {
 		os.Remove(cb1.filePath)
 		os.Remove(cb2.filePath)
@@ -260,8 +264,8 @@ func TestCircuitBreaker_DifferentDatabasesSeparateState(t *testing.T) {
 	// Two breakers for the same host:port but different databases should have
 	// independent state. This prevents one degraded project from tripping the
 	// breaker for all worktrees on a shared server (GH#3140).
-	cb1 := newCircuitBreaker("127.0.0.1", 99999, "project_alpha")
-	cb2 := newCircuitBreaker("127.0.0.1", 99999, "project_beta")
+	cb1 := mustNewCircuitBreaker(t, "127.0.0.1", 99999, "project_alpha")
+	cb2 := mustNewCircuitBreaker(t, "127.0.0.1", 99999, "project_beta")
 	t.Cleanup(func() {
 		os.Remove(cb1.filePath)
 		os.Remove(cb2.filePath)
@@ -474,10 +478,10 @@ func TestCircuitBreakerDir_UsesSubdirectory(t *testing.T) {
 	// Verify that circuit breaker files are created in the dedicated
 	// subdirectory, not directly in the temp root (which can have millions of
 	// entries).
-	cb := newCircuitBreaker("127.0.0.1", 44444, "")
+	cb := mustNewCircuitBreaker(t, "127.0.0.1", 44444, "")
 	t.Cleanup(func() { os.Remove(cb.filePath) })
 
-	wantDir, _ := circuitBreakerPaths()
+	wantDir, _ := mustCircuitBreakerPaths(t)
 	if filepath.Dir(cb.filePath) != wantDir {
 		t.Errorf("circuit breaker file should be in %s, got dir %s",
 			wantDir, filepath.Dir(cb.filePath))
@@ -490,27 +494,52 @@ func TestCircuitBreakerDir_UsesSubdirectory(t *testing.T) {
 	}
 }
 
-// TestCircuitBreakerDir_DerivedFromTempDir verifies the breaker directory is
-// derived from os.TempDir() rather than a hardcoded "/tmp", so on Windows it
-// lands under %TEMP% instead of C:\tmp (GH#4636).
-func TestCircuitBreakerDir_DerivedFromTempDir(t *testing.T) {
-	custom := t.TempDir()
-	// os.TempDir() honors these across platforms (TMPDIR on unix; TMP/TEMP on
-	// Windows), so the breaker dir must follow.
-	t.Setenv("TMPDIR", custom)
-	t.Setenv("TMP", custom)
-	t.Setenv("TEMP", custom)
+// TestCircuitBreakerDir_UnderUserCache verifies live breaker state lives in the
+// user's cache directory and never under the temp root: breaker files
+// coordinate independent processes and outlive any single invocation.
+func TestCircuitBreakerDir_UnderUserCache(t *testing.T) {
+	cache := t.TempDir()
+	// os.UserCacheDir() honors XDG_CACHE_HOME on unix and LocalAppData on Windows.
+	t.Setenv("XDG_CACHE_HOME", cache)
+	t.Setenv("LocalAppData", cache)
+	tempRoot := t.TempDir()
+	t.Setenv("TMPDIR", tempRoot)
+	t.Setenv("TMP", tempRoot)
+	t.Setenv("TEMP", tempRoot)
 
-	got := circuitBreakerDir()
-	if want := filepath.Join(os.TempDir(), "beads-circuit"); got != want {
-		t.Errorf("circuitBreakerDir() = %q, want %q", got, want)
+	userCache, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatalf("os.UserCacheDir: %v", err)
 	}
-	if !strings.HasPrefix(got, os.TempDir()) {
-		t.Errorf("circuitBreakerDir() = %q, want it under os.TempDir() %q", got, os.TempDir())
+	got, err := CircuitBreakerDir()
+	if err != nil {
+		t.Fatalf("CircuitBreakerDir() error = %v", err)
 	}
-	// When the temp root is not "/tmp", the path must not be the old literal.
-	if os.TempDir() != "/tmp" && got == "/tmp/beads-circuit" {
-		t.Errorf("circuitBreakerDir() still hardcoded to /tmp: %q", got)
+	if want := filepath.Join(userCache, "beads", "circuit"); got != want {
+		t.Errorf("CircuitBreakerDir() = %q, want %q", got, want)
+	}
+	if strings.HasPrefix(got, os.TempDir()) || strings.HasPrefix(got, "/tmp/") {
+		t.Errorf("CircuitBreakerDir() = %q, must not live under a temp root", got)
+	}
+}
+
+// TestCircuitBreakerDir_UnresolvableCacheIsAnError verifies an unresolvable
+// user cache directory surfaces as an error instead of a substitute location.
+func TestCircuitBreakerDir_UnresolvableCacheIsAnError(t *testing.T) {
+	// os.UserCacheDir fails on every platform once its inputs are empty:
+	// XDG_CACHE_HOME+HOME (unix), HOME (darwin), LocalAppData (windows).
+	t.Setenv("XDG_CACHE_HOME", "")
+	t.Setenv("HOME", "")
+	t.Setenv("LocalAppData", "")
+	if _, err := CircuitBreakerDir(); err == nil {
+		t.Fatal("CircuitBreakerDir() with no resolvable cache directory returned nil error")
+	}
+	t.Setenv(testCircuitBreakerDirEnv, "")
+	if _, err := newCircuitBreaker("127.0.0.1", 44444, "unresolvable"); err == nil {
+		t.Fatal("newCircuitBreaker() with no resolvable cache directory returned nil error")
+	}
+	if err := CleanStaleCircuitBreakerFiles(); err == nil {
+		t.Fatal("CleanStaleCircuitBreakerFiles() with no resolvable cache directory returned nil error")
 	}
 }
 
@@ -519,7 +548,7 @@ func TestCircuitBreakerPathsTestOverrideIsolatesCurrentAndLegacyState(t *testing
 	t.Setenv(testCircuitBreakerDirEnv, testDir)
 	t.Setenv("BEADS_TEST_MODE", "")
 
-	dir, legacy := circuitBreakerPaths()
+	dir, legacy := mustCircuitBreakerPaths(t)
 	if dir != testDir {
 		t.Fatalf("circuit directory = %q, want %q", dir, testDir)
 	}
@@ -527,14 +556,16 @@ func TestCircuitBreakerPathsTestOverrideIsolatesCurrentAndLegacyState(t *testing
 	if legacy != wantLegacy {
 		t.Fatalf("legacy circuit file = %q, want %q", legacy, wantLegacy)
 	}
-	cb := newCircuitBreaker("127.0.0.1", 44444, "isolated")
+	cb := mustNewCircuitBreaker(t, "127.0.0.1", 44444, "isolated")
 	if filepath.Dir(cb.filePath) != testDir {
 		t.Fatalf("breaker path = %q, want directory %q", cb.filePath, testDir)
 	}
 	if err := os.WriteFile(wantLegacy, []byte("legacy"), 0o600); err != nil {
 		t.Fatalf("write isolated legacy state: %v", err)
 	}
-	CleanStaleCircuitBreakerFiles()
+	if err := CleanStaleCircuitBreakerFiles(); err != nil {
+		t.Fatalf("CleanStaleCircuitBreakerFiles() error = %v", err)
+	}
 	if _, err := os.Stat(wantLegacy); !os.IsNotExist(err) {
 		t.Fatalf("isolated legacy cleanup error = %v, want not-exist", err)
 	}
@@ -542,8 +573,8 @@ func TestCircuitBreakerPathsTestOverrideIsolatesCurrentAndLegacyState(t *testing
 
 func TestCircuitBreakerPathsProductionDefaultsUnchanged(t *testing.T) {
 	t.Setenv(testCircuitBreakerDirEnv, "")
-	dir, legacy := circuitBreakerPaths()
-	if want := circuitBreakerDir(); dir != want {
+	dir, legacy := mustCircuitBreakerPaths(t)
+	if want := mustCircuitBreakerDir(t); dir != want {
 		t.Fatalf("production circuit directory = %q, want %q", dir, want)
 	}
 	if legacy != legacyCircuitBreakerFile {
@@ -553,8 +584,8 @@ func TestCircuitBreakerPathsProductionDefaultsUnchanged(t *testing.T) {
 
 func TestCircuitBreakerPathsRejectsRelativeOverride(t *testing.T) {
 	t.Setenv(testCircuitBreakerDirEnv, "relative-test-dir")
-	dir, legacy := circuitBreakerPaths()
-	if dir != circuitBreakerDir() || legacy != legacyCircuitBreakerFile {
+	dir, legacy := mustCircuitBreakerPaths(t)
+	if dir != mustCircuitBreakerDir(t) || legacy != legacyCircuitBreakerFile {
 		t.Fatalf("relative override selected paths dir=%q legacy=%q", dir, legacy)
 	}
 }
@@ -715,4 +746,37 @@ func newTestCircuitBreakerOnPort(t *testing.T, port int) *circuitBreaker {
 		port:     port,
 		filePath: filepath.Join(dir, "circuit.json"),
 	}
+}
+
+// mustNewCircuitBreaker builds a breaker through the production constructor and
+// fails the test with the constructor's own error.
+func mustNewCircuitBreaker(t *testing.T, host string, port int, database string) *circuitBreaker {
+	t.Helper()
+	cb, err := newCircuitBreaker(host, port, database)
+	if err != nil {
+		t.Fatalf("newCircuitBreaker(%q, %d, %q) error = %v", host, port, database, err)
+	}
+	return cb
+}
+
+// mustCircuitBreakerPaths resolves the breaker paths and fails the test with
+// the resolution error.
+func mustCircuitBreakerPaths(t *testing.T) (dir, legacyFile string) {
+	t.Helper()
+	dir, legacyFile, err := circuitBreakerPaths()
+	if err != nil {
+		t.Fatalf("circuitBreakerPaths() error = %v", err)
+	}
+	return dir, legacyFile
+}
+
+// mustCircuitBreakerDir resolves the production breaker directory and fails the
+// test with the resolution error.
+func mustCircuitBreakerDir(t *testing.T) string {
+	t.Helper()
+	dir, err := CircuitBreakerDir()
+	if err != nil {
+		t.Fatalf("CircuitBreakerDir() error = %v", err)
+	}
+	return dir
 }

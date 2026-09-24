@@ -1735,7 +1735,10 @@ var stopRejectedAutoStartedServer = doltserver.Stop
 // newServerMode creates a DoltStore connected to a running dolt sql-server.
 // This path is pure Go and does not require CGO.
 func newServerMode(ctx context.Context, cfg *Config) (*DoltStore, error) {
-	breaker := initializeServerCircuitBreaker(cfg)
+	breaker, err := initializeServerCircuitBreaker(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	// Circuit breaker: fail-fast if the server is known to be down.
 	if breaker != nil && !breaker.Allow() {
@@ -1872,7 +1875,16 @@ func newServerMode(ctx context.Context, cfg *Config) (*DoltStore, error) {
 				}
 				cfg.ServerPort = port
 				addr = net.JoinHostPort(cfg.ServerHost, fmt.Sprintf("%d", cfg.ServerPort))
-				breaker = maybeNewCircuitBreaker(cfg.ServerHost, cfg.ServerPort, cfg.Database)
+				var breakerErr error
+				breaker, breakerErr = maybeNewCircuitBreaker(cfg.ServerHost, cfg.ServerPort, cfg.Database)
+				if breakerErr != nil {
+					if autoStartedDir != "" {
+						if releaseErr := autoStartRelease(autoStartedDir); releaseErr != nil {
+							return nil, errors.Join(breakerErr, fmt.Errorf("release auto-start reference: %w", releaseErr))
+						}
+					}
+					return nil, breakerErr
+				}
 			}
 			// Retry connection with longer timeout (server just started)
 			conn, dialErr = net.DialTimeout("tcp", addr, 2*time.Second)
@@ -2124,13 +2136,15 @@ var (
 	ensureResolvedPortFile  = doltserver.EnsurePortFile
 )
 
-func initializeServerCircuitBreaker(cfg *Config) *circuitBreaker {
+func initializeServerCircuitBreaker(cfg *Config) (*circuitBreaker, error) {
 	if cfg.DisableAutoStart || os.Getenv("BEADS_TEST_MODE") == "1" {
-		return nil
+		return nil, nil
 	}
 	// Clean stale circuit breaker files before checking — prevents leftover
 	// state from previous sessions poisoning fresh writable opens (GH#2598).
-	cleanServerCircuitState()
+	if err := cleanServerCircuitState(); err != nil {
+		return nil, err
+	}
 	return newServerCircuitBreaker(cfg.ServerHost, cfg.ServerPort, cfg.Database)
 }
 
