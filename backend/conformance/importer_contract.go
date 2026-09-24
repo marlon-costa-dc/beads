@@ -2,7 +2,6 @@ package conformance
 
 import (
 	"context"
-	"slices"
 	"testing"
 	"time"
 
@@ -236,54 +235,45 @@ func RunImporterReportsTheAbsentTargetItDroppedOnce(t *testing.T, ctx context.Co
 	assertImporterSkipped(t, result, []publicops.SkippedDependency{{IssueID: source, DependsOnID: absent}})
 }
 
-// RunImporterWiresTheCrossPlaneEdgeBetweenItsRows pins the plane rule's OTHER
-// branch. The request is the one RunBatchCreatorRefusesACrossPlaneInBatchEdge
+// RunImporterReportsTheCrossPlaneEdgeItDropped pins the same obligation for the
+// plane rule. The request is the one RunBatchCreatorRefusesACrossPlaneInBatchEdge
 // sends and refuses whole — a durable item and an ephemeral item created
-// together with an edge between them. BatchCreator refuses because its
-// unit-of-work body creates item by item and cannot promise the edge; the
-// importer writes every row of BOTH planes in one transaction before it
-// persists any edge, so the edge is writable. Until wy-a648lq the engine's
-// per-batch plane filter dropped it anyway — skip-reported, but a re-import
-// upserts both rows unchanged and never backfills it, so an exported snapshot
-// lost every regular<->wisp edge for good (wy-4276q8). A report justifies a
-// drop only when the drop is forced; this one was not.
+// together with an edge between them — where the import keeps BOTH ROWS and
+// drops only the edge.
 //
-// BOTH DIRECTIONS ARE ASSERTED, because they land in different places: a wisp
-// depending on a durable row writes wisp_dependencies.depends_on_issue_id, a
-// durable row depending on a wisp writes dependencies.depends_on_wisp_id, and
-// an implementation could wire one and drop the other. Every row is asserted
-// on its own table, and the skip report must be EMPTY — an entry naming an
-// edge the batch actually wrote is the report lying in the other direction.
-func RunImporterWiresTheCrossPlaneEdgeBetweenItsRows(t *testing.T, ctx context.Context, fixture ImporterFixture) {
+// BOTH ROWS ARE ASSERTED, on their own tables. The dropped edge is the visible
+// part, and an implementation that dropped the ephemeral item along with it
+// would satisfy every statement about the edge: there is no edge because there
+// is no wisp. The audit twin's arm (b) reads both rows back through GetIssue,
+// which resolves across planes and so cannot say WHICH table either landed in.
+//
+// The report is again an exact list. Arm (b) of the audit case asserts no
+// report at all — it passes a nil skip callback — so a silent cross-plane drop
+// is invisible to it, which is precisely the drop BatchCreator calls data
+// loss.
+func RunImporterReportsTheCrossPlaneEdgeItDropped(t *testing.T, ctx context.Context, fixture ImporterFixture) {
 	t.Helper()
 	durable := fixture.IssuePrefix + "-impplane-durable"
 	wisp := fixture.IssuePrefix + "-impplane-wisp"
-	depender := fixture.IssuePrefix + "-impplane-depender"
 
 	ephemeral := importerIssue(wisp, "the ephemeral end")
 	ephemeral.Ephemeral = true
 	ephemeral.Dependencies = []*types.Dependency{
 		{IssueID: wisp, DependsOnID: durable, Type: types.DepBlocks},
 	}
-	durableDepender := importerIssue(depender, "the durable row blocked by the wisp")
-	durableDepender.Dependencies = []*types.Dependency{
-		{IssueID: depender, DependsOnID: wisp, Type: types.DepBlocks},
-	}
 	result := runImporterBatch(t, ctx, fixture, "cross-plane",
-		importerIssue(durable, "the durable end"), ephemeral, durableDepender)
+		importerIssue(durable, "the durable end"), ephemeral)
 
 	assertImporterRowCount(t, ctx, fixture, "issues", durable, 1)
 	assertImporterRowCount(t, ctx, fixture, "wisps", wisp, 1)
-	assertImporterRowCount(t, ctx, fixture, "issues", depender, 1)
-	if result.Created != 3 {
-		t.Errorf("Created = %d, want 3", result.Created)
+	if result.Created != 2 {
+		t.Errorf("Created = %d, want 2: dropping an edge costs the batch neither row", result.Created)
 	}
-	assertImporterEdgeCount(t, ctx, fixture, wisp, durable, 1)
-	assertImporterEdgeCount(t, ctx, fixture, depender, wisp, 1)
-	assertImporterSkipped(t, result, nil)
+	assertImporterEdgeCount(t, ctx, fixture, wisp, durable, 0)
+	assertImporterSkipped(t, result, []publicops.SkippedDependency{{IssueID: wisp, DependsOnID: durable}})
 }
 
-// RunImporterReportsTheCycleEdgeItDropped pins the last of the drops: an
+// RunImporterReportsTheCycleEdgeItDropped pins the last of the three drops: an
 // in-batch dependency cycle. Both rows land, the graph stays acyclic, and the
 // ONE edge given up to keep it acyclic is named.
 //
@@ -387,14 +377,15 @@ func assertImporterSkipped(t *testing.T, result publicops.ImportBatchResult, wan
 		t.Fatalf("SkippedDependencies = %+v, want exactly %d entry/entries %+v: the report is the whole reason a dropped edge is not data loss, so a missing entry hides one and a repeated entry is the deduplication clause failing",
 			result.SkippedDependencies, len(want), want)
 	}
-	if !slices.EqualFunc(result.SkippedDependencies, want,
-		func(got, expected publicops.SkippedDependency) bool {
-			return got.IssueID == expected.IssueID &&
-				got.DependsOnID == expected.DependsOnID &&
-				got.Reason != ""
-		}) {
-		t.Errorf("SkippedDependencies = %+v, want %v in order, each carrying a reason; a caller told only that an edge went missing cannot act on it",
-			result.SkippedDependencies, want)
+	for i, got := range result.SkippedDependencies {
+		if got.IssueID != want[i].IssueID || got.DependsOnID != want[i].DependsOnID {
+			t.Errorf("SkippedDependencies[%d] names %s -> %s, want %s -> %s",
+				i, got.IssueID, got.DependsOnID, want[i].IssueID, want[i].DependsOnID)
+		}
+		if got.Reason == "" {
+			t.Errorf("SkippedDependencies[%d] (%s -> %s) carries no reason; a caller told only that an edge went missing cannot act on it",
+				i, got.IssueID, got.DependsOnID)
+		}
 	}
 }
 
