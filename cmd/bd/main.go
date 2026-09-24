@@ -27,6 +27,7 @@ import (
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/debug"
+	"github.com/steveyegge/beads/internal/discoveryceiling"
 	"github.com/steveyegge/beads/internal/doltserver"
 	"github.com/steveyegge/beads/internal/hooks"
 	"github.com/steveyegge/beads/internal/metrics"
@@ -749,10 +750,14 @@ func resolveCommandBeadsDir(dbPath string) string {
 		return beadsDir
 	}
 
+	ceiling := discoveryceiling.For(filepath.Dir(dbPath))
 	for dir := filepath.Dir(dbPath); dir != "" && dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
 		candidate := filepath.Join(dir, ".beads")
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
 			return candidate
+		}
+		if discoveryceiling.Reached(dir, ceiling) {
+			break
 		}
 	}
 

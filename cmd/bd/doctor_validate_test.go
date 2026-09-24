@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/steveyegge/beads/internal/storage/dolt"
@@ -52,13 +53,26 @@ func TestValidateCheck_AllClean(t *testing.T) {
 
 	checks := collectValidateChecks(tmpDir)
 
+	// The validate category is exactly these data-integrity checks, in order.
+	// Asserting names rather than a count keeps the test honest when a check is
+	// added: the fifth one (Git Conflicts, 041b74b54) went unnoticed while this
+	// test still expected four.
+	wantNames := []string{
+		"Cross-Table Duplicates",
+		"Duplicate Issues",
+		"Orphaned Dependencies",
+		"Test Pollution",
+		"Git Conflicts",
+	}
+	gotNames := make([]string, 0, len(checks))
 	for _, cr := range checks {
+		gotNames = append(gotNames, cr.check.Name)
 		if cr.check.Status != statusOK {
 			t.Errorf("%s: status = %q, want %q (message: %s)", cr.check.Name, cr.check.Status, statusOK, cr.check.Message)
 		}
 	}
-	if len(checks) != 4 {
-		t.Errorf("Expected 4 checks, got %d", len(checks))
+	if !slices.Equal(gotNames, wantNames) {
+		t.Errorf("validate checks = %v, want %v", gotNames, wantNames)
 	}
 }
 

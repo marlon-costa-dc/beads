@@ -7,13 +7,20 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/steveyegge/beads/internal/discoveryceiling"
 	"github.com/steveyegge/beads/internal/git"
 )
 
 func setupConfigWorktree(t *testing.T) (mainRepoDir, worktreeDir, mainConfigPath string) {
 	t.Helper()
 
+	// Isolate from an operator host: config discovery walks up, and a real
+	// ~/.beads above TMPDIR must not shadow the synthetic tree's
+	// worktree-fallback path.
 	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+	t.Setenv(discoveryceiling.Env, tmpDir)
+
 	mainRepoDir = filepath.Join(tmpDir, "main-repo")
 	if err := os.MkdirAll(mainRepoDir, 0o755); err != nil {
 		t.Fatalf("failed to create main repo dir: %v", err)

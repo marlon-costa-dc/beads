@@ -9,6 +9,7 @@ import (
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/configfile"
+	"github.com/steveyegge/beads/internal/discoveryceiling"
 	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/utils"
@@ -171,6 +172,7 @@ func findOriginalBeadsDir() string {
 	}
 
 	// Walk up directory tree looking for .beads with redirect
+	ceiling := discoveryceiling.For(cwd)
 	for dir := cwd; dir != "/" && dir != "."; {
 		beadsDir := filepath.Join(dir, ".beads")
 		if info, err := os.Stat(beadsDir); err == nil && info.IsDir() {
@@ -184,10 +186,11 @@ func findOriginalBeadsDir() string {
 
 		// Move up one directory
 		parent := filepath.Dir(dir)
-		if parent == dir {
+		if parent == dir || discoveryceiling.Reached(dir, ceiling) {
 			// Reached filesystem root (works on both Unix and Windows)
 			// On Unix: filepath.Dir("/") returns "/"
 			// On Windows: filepath.Dir("C:\\") returns "C:\\"
+			// or the hermetic test harness ceiling.
 			break
 		}
 		dir = parent

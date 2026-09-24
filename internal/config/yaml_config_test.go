@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/spf13/viper"
+	"github.com/steveyegge/beads/internal/discoveryceiling"
 	"gopkg.in/yaml.v3"
 )
 
@@ -624,10 +625,42 @@ func TestFindProjectBeadsDir_NonGitTreeWithoutConfig(t *testing.T) {
 	restore := envSnapshot(t)
 	defer restore()
 
-	t.Chdir(t.TempDir())
+	// Cap the walk-up at the synthetic tree: an operator host can carry a
+	// real ~/.beads above TMPDIR that must not be found.
+	tmp := t.TempDir()
+	t.Setenv(discoveryceiling.Env, tmp)
+	t.Chdir(tmp)
 
 	if got := findProjectBeadsDir(); got != "" {
 		t.Fatalf("findProjectBeadsDir() = %q, want empty", got)
+	}
+}
+
+func TestFindProjectBeadsDirHonorsDiscoveryCeiling(t *testing.T) {
+	restore := envSnapshot(t)
+	defer restore()
+
+	outer := t.TempDir()
+	outerBeads := filepath.Join(outer, ".beads")
+	if err := os.MkdirAll(outerBeads, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ceiling := filepath.Join(outer, "sandbox")
+	start := filepath.Join(ceiling, "tmp", "case")
+	if err := os.MkdirAll(start, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(start)
+
+	// Without the ceiling the walk reaches the outer ledger...
+	t.Setenv(discoveryceiling.Env, "")
+	if got := findProjectBeadsDir(); got == "" {
+		t.Fatalf("precondition: findProjectBeadsDir() found nothing; the outer ledger %q must be reachable without a ceiling", outerBeads)
+	}
+	// ...and with it the walk stops at the sandbox root.
+	t.Setenv(discoveryceiling.Env, ceiling)
+	if got := findProjectBeadsDir(); got != "" {
+		t.Fatalf("findProjectBeadsDir escaped the discovery ceiling: got %q, outer ledger %q", got, outerBeads)
 	}
 }
 

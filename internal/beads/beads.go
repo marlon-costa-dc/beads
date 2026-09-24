@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/steveyegge/beads/internal/configfile"
+	"github.com/steveyegge/beads/internal/discoveryceiling"
 	"github.com/steveyegge/beads/internal/git"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/backends"
@@ -445,6 +446,7 @@ func findLocalBeadsDir() string {
 		return ""
 	}
 
+	ceiling := discoveryceiling.For(cwd)
 	for dir := cwd; dir != "/" && dir != "."; {
 		beadsDir := filepath.Join(dir, ".beads")
 		if info, err := os.Stat(beadsDir); err == nil && info.IsDir() {
@@ -453,10 +455,11 @@ func findLocalBeadsDir() string {
 
 		// Move up one directory
 		parent := filepath.Dir(dir)
-		if parent == dir {
+		if parent == dir || discoveryceiling.Reached(dir, ceiling) {
 			// Reached filesystem root (works on both Unix and Windows)
 			// On Unix: filepath.Dir("/") returns "/"
 			// On Windows: filepath.Dir("C:\\") returns "C:\\"
+			// or the hermetic test harness ceiling.
 			break
 		}
 		dir = parent
@@ -630,6 +633,7 @@ func FindBeadsDirFrom(startDir string) string {
 		}
 	}
 
+	ceiling := discoveryceiling.For(startDir)
 	for dir := startDir; dir != "/" && dir != "."; {
 		beadsDir := filepath.Join(dir, ".beads")
 		if info, err := os.Stat(beadsDir); err == nil && info.IsDir() {
@@ -650,7 +654,7 @@ func FindBeadsDirFrom(startDir string) string {
 		}
 
 		parent := filepath.Dir(dir)
-		if parent == dir {
+		if parent == dir || discoveryceiling.Reached(dir, ceiling) {
 			break
 		}
 		dir = parent
@@ -819,6 +823,7 @@ func FindBeadsDir() string {
 	if walkBoundary != "" {
 		walkBoundaryCanonical = utils.CanonicalizePath(walkBoundary)
 	}
+	ceiling := discoveryceiling.For(cwdCanonical)
 	for dir := cwdCanonical; dir != "/" && dir != "."; {
 		// Stop at the walk boundary (exclusive — don't check this directory).
 		// For worktrees: stops before worktree root so step 3 handles it.
@@ -837,7 +842,7 @@ func FindBeadsDir() string {
 		}
 
 		parent := filepath.Dir(dir)
-		if parent == dir {
+		if parent == dir || discoveryceiling.Reached(dir, ceiling) {
 			break
 		}
 		dir = parent
@@ -983,7 +988,7 @@ func FindBeadsDir() string {
 			}
 
 			parent := filepath.Dir(dir)
-			if parent == dir {
+			if parent == dir || discoveryceiling.Reached(dir, ceiling) {
 				break
 			}
 			dir = parent
@@ -1245,6 +1250,7 @@ func findDatabaseInTree() string {
 	}
 
 	// Walk up directory tree (regular repository or worktree fallback)
+	ceiling := discoveryceiling.For(dir)
 	for {
 		beadsDir := filepath.Join(dir, ".beads")
 		if info, err := os.Stat(beadsDir); err == nil && info.IsDir() {
@@ -1266,6 +1272,9 @@ func findDatabaseInTree() string {
 
 		// Stop at git root to avoid finding unrelated databases
 		if gitRootCanonical != "" && dir == gitRootCanonical {
+			break
+		}
+		if discoveryceiling.Reached(dir, ceiling) {
 			break
 		}
 
@@ -1293,6 +1302,7 @@ func FindAllDatabases() []DatabaseInfo {
 
 	// Find git root to limit the search
 	gitRoot := findGitRoot()
+	ceiling := discoveryceiling.For(dir)
 
 	// Walk up directory tree
 	for {
@@ -1325,7 +1335,7 @@ func FindAllDatabases() []DatabaseInfo {
 				if seen[canonicalPath] {
 					// Move up one directory
 					parent := filepath.Dir(dir)
-					if parent == dir {
+					if parent == dir || discoveryceiling.Reached(dir, ceiling) {
 						break
 					}
 					dir = parent
@@ -1353,6 +1363,9 @@ func FindAllDatabases() []DatabaseInfo {
 
 		// Stop at git root to avoid finding unrelated databases
 		if gitRoot != "" && dir == gitRoot {
+			break
+		}
+		if discoveryceiling.Reached(dir, ceiling) {
 			break
 		}
 
