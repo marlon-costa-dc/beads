@@ -186,8 +186,8 @@ changelog:
       order: 999
 
 release:
-  # The release repository is configuration: release.yml derives these from the
-  # RELEASE_REPOSITORY Actions variable, and an unset value is a template error.
+  # The release repository is the one running the release: release.yml derives
+  # these from GITHUB_REPOSITORY, and an unset value is a template error.
   github:
     owner: "{{ .Env.RELEASE_OWNER }}"
     name: "{{ .Env.RELEASE_NAME }}"

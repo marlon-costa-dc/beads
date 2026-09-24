@@ -11,7 +11,7 @@ import (
 )
 
 // This fork distributes bd only through the GitHub Releases of the repository
-// named by the RELEASE_REPOSITORY Actions variable. Publishing to a package
+// whose v* tag triggered the release run. Publishing to a package
 // registry or announcing a release anywhere else is outside that
 // authorization, so those surfaces must not exist at all: a guard condition
 // keeps a credentialed publish step one configuration change away from
@@ -27,19 +27,28 @@ func TestReleaseWorkflowHasNoPublishJobs(t *testing.T) {
 	}
 }
 
-// Every release job must descend from release-target, the only job that reads
-// the RELEASE_REPOSITORY variable and fails when it is unset. A job outside that
-// chain would run whatever the variable says.
+// Every release job must descend from release-target, the only job that
+// resolves the release repository. It derives it from the run's own identity
+// (GITHUB_REPOSITORY) and reads no Actions variable, so there is no second
+// setting that could name a different repository.
 func TestReleaseWorkflowJobsAreGatedByReleaseTarget(t *testing.T) {
 	workflow := readCIWorkflow(t, "release.yml")
 
 	target := workflow.job(t, "release-target")
 	if target.If != "" {
-		t.Errorf("release-target must always run so an unset RELEASE_REPOSITORY fails the run; has if: %q", target.If)
+		t.Errorf("release-target must always run so a malformed repository identity fails the run; has if: %q", target.If)
 	}
 	resolve := target.step(t, "Resolve release repository")
-	if got, want := resolve.Env["RELEASE_REPOSITORY"], "${{ vars.RELEASE_REPOSITORY }}"; got != want {
-		t.Errorf("release-target reads RELEASE_REPOSITORY from %q, want %q", got, want)
+	if len(resolve.Env) != 0 {
+		t.Errorf("release-target must derive the release repository from GITHUB_REPOSITORY, not from step env %v", resolve.Env)
+	}
+	for _, needle := range []string{"vars.", "RELEASE_REPOSITORY"} {
+		if strings.Contains(resolve.Run, needle) {
+			t.Errorf("release-target resolution references %q; the release repository is the run's own GITHUB_REPOSITORY", needle)
+		}
+	}
+	if !strings.Contains(resolve.Run, "GITHUB_REPOSITORY") {
+		t.Error("release-target resolution does not derive the repository from GITHUB_REPOSITORY")
 	}
 
 	for name := range workflow.Jobs {
