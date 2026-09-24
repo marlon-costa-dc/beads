@@ -34,9 +34,11 @@ import (
 // and that the ON UPDATE CASCADE on the typed target columns is what makes a
 // plain rename leave a stale primary key behind.
 
-// depRekeyMarkerVersion is ignored migration 0026, the clone-local marker whose
-// pending state forces the one repair pass.
-const depRekeyMarkerVersion = 26
+// depRekeyMarkerVersion is the clone-local marker whose pending state forces
+// the one repair pass. Upstream ships it as ignored 0026; this fork numbers it
+// 0027 because the fork's stores already recorded the frozen
+// ignored/0026_add_wisps_current_revision (see FORK.md).
+const depRekeyMarkerVersion = 27
 
 // TestDepRekeyMarkerIsLatestIgnored keeps the fixtures in this file honest. They
 // force the repair pass by unrecording the marker, which only works while the

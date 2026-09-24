@@ -10,7 +10,8 @@ this fork's release label.
 
 - **Product code equals upstream.** `git diff <upstream-tag> origin/<default-branch>`
   lists only fork plumbing: this file, `scripts/fork/`, the fork release
-  workflow, and the few upstream files the plumbing has to touch.
+  workflow, and the few upstream files the plumbing has to touch. The one
+  exception is the frozen migrations described below.
 - **A product patch needs a reason.** It lives on its own `fork/<topic>`
   branch and exists only for a defect we hit at runtime with no upstream fix.
   Refactors, style changes and dead-code removal of upstream code go upstream,
@@ -18,6 +19,28 @@ this fork's release label.
 - **Upstream's own mechanisms come first.** Before patching, look for an
   existing configuration key, environment variable, extension point or
   upstream commit.
+
+## Frozen migrations adopted from the old integration branch
+
+Before v1.3.0, the old `dc-use` absorbed unreleased upstream-main commit
+`2bb1e20de` (#6304). That added `0067_add_versioned_beads_schema.{up,down}.sql`
+and `ignored/0026_add_wisps_current_revision.up.sql`, and this fork's stores
+recorded that ignored `0026` (its `content_hash` is the sha256 of that file).
+Shipped migrations are frozen (`scripts/check-migration-hygiene.sh` Check C),
+so the fork keeps all three files byte-identical. It numbers upstream v1.3.0's
+own ignored `0026_dep_rekey_dedup_marker` as **ignored `0027`**, the next free
+ordinal, as the hygiene rule prescribes.
+
+What this means in practice:
+- **Main series ends at 0067.** Its body is byte-identical to upstream main's
+  `0067`, including the CLI direct-DDL override backported verbatim from
+  upstream main, so a future upstream release carrying `0067` converges.
+- **The dep re-key marker is pending ignored `0027`.** It forces the one
+  merge-aware dependency-id re-key pass, exactly as upstream's `0026` does.
+- **Syncing to an upstream release that renumbers these files**, for example
+  upstream main's `ignored/0027_add_wisps_current_revision`: keep the fork's
+  frozen files and give each new upstream ignored migration the next free
+  ordinal. Never rename or edit a migration a store may have recorded.
 
 ## Update to a new upstream release
 
