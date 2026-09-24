@@ -345,6 +345,10 @@ func Initialize() error {
 	// List command defaults
 	v.SetDefault("list.limit", 50)
 
+	// Dedup gates skip orchestrator-managed workflow beads whose metadata
+	// carries a key under one of these prefixes (Gas City uses "gc.").
+	v.SetDefault("dedup.workflow_metadata_prefixes", []string{"gc."})
+
 	// Output configuration (GH#1384)
 	// Controls title display in command feedback messages.
 	// 0 = hide title, N > 0 = truncate to N chars with "…"

@@ -47,12 +47,19 @@ The AI approach sends candidate pairs to an Anthropic-compatible model for seman
 It first uses mechanical pre-filtering to reduce the number of API calls,
 then asks the LLM to judge whether the remaining pairs are true duplicates.
 
+Orchestrator-managed workflow beads (metadata carrying a key under one of the
+prefixes configured in dedup.workflow_metadata_prefixes, default "gc.", e.g.
+Gas City spec/logical/control template instances) are skipped: their identical
+template text is owned by the orchestrator lifecycle, not by content
+deduplication. Pass --include-workflow to include them anyway.
+
 Examples:
   bd find-duplicates                       # Mechanical similarity (default)
   bd find-duplicates --threshold 0.4       # Lower threshold = more results
   bd find-duplicates --method ai           # Use AI for semantic comparison
   bd find-duplicates --status open         # Only check open issues
   bd find-duplicates --limit 20            # Show top 20 pairs
+  bd find-duplicates --include-workflow    # Also consider orchestrator-managed beads
   bd find-duplicates --json                # JSON output`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
@@ -67,6 +74,7 @@ func init() {
 	findDuplicatesCmd.Flags().String("model", "", "AI model to use (only with --method ai; default from config ai.model)")
 	// Defensive row cap (be-x42v): exits 2 on overage, default disabled.
 	addMaxRowsFlag(findDuplicatesCmd)
+	findDuplicatesCmd.Flags().Bool("include-workflow", false, "Also consider orchestrator-managed workflow beads (metadata keys under dedup.workflow_metadata_prefixes); they are skipped by default")
 	rootCmd.AddCommand(findDuplicatesCmd)
 }
 
@@ -92,6 +100,7 @@ func runFindDuplicates(cmd *cobra.Command, _ []string) error {
 	status, _ := cmd.Flags().GetString("status")
 	limit, _ := cmd.Flags().GetInt("limit")
 	model, _ := cmd.Flags().GetString("model")
+	includeWorkflow, _ := cmd.Flags().GetBool("include-workflow")
 	if model == "" {
 		_, keySource := config.ResolveAIAPIKey("")
 		model = config.DefaultAIModelFor(keySource)
@@ -129,7 +138,7 @@ func runFindDuplicates(cmd *cobra.Command, _ []string) error {
 		if err := rejectResolvedMaxRowsUnderProxiedServer(maxRows); err != nil {
 			return err
 		}
-		return runFindDuplicatesProxiedServer(rootCtx, filter, status, method, threshold, limit, model)
+		return runFindDuplicatesProxiedServer(rootCtx, filter, status, method, threshold, limit, model, includeWorkflow)
 	}
 
 	issues, err := store.SearchIssues(rootCtx, "", filter)
@@ -141,7 +150,7 @@ func runFindDuplicates(cmd *cobra.Command, _ []string) error {
 	}
 	issues = filterClosedIfNoStatus(issues, status)
 
-	return reportFindDuplicates(rootCtx, issues, method, threshold, limit, model)
+	return reportFindDuplicates(rootCtx, issues, method, threshold, limit, model, includeWorkflow)
 }
 
 func filterClosedIfNoStatus(issues []*types.Issue, status string) []*types.Issue {
@@ -157,15 +166,25 @@ func filterClosedIfNoStatus(issues []*types.Issue, status string) []*types.Issue
 	return filtered
 }
 
-func reportFindDuplicates(ctx context.Context, issues []*types.Issue, method string, threshold float64, limit int, model string) error {
+func reportFindDuplicates(ctx context.Context, issues []*types.Issue, method string, threshold float64, limit int, model string, includeWorkflow bool) error {
+	issues, scope, err := scopeWorkflowIssues(issues, includeWorkflow)
+	if err != nil {
+		return HandleErrorRespectJSON("classifying workflow issues: %v", err)
+	}
+
 	if len(issues) < 2 {
 		if jsonOutput {
-			return outputJSON(map[string]interface{}{
+			output := map[string]interface{}{
 				"pairs": []interface{}{},
 				"count": 0,
-			})
+			}
+			scope.addJSON(output)
+			return outputJSON(output)
 		}
 		fmt.Println("Not enough issues to compare (need at least 2)")
+		if notice := scope.skippedNotice(); notice != "" {
+			fmt.Println(notice)
+		}
 		return nil
 	}
 
@@ -211,21 +230,29 @@ func reportFindDuplicates(ctx context.Context, issues []*types.Issue, method str
 				Reason:      p.Reason,
 			}
 		}
-		return outputJSON(map[string]interface{}{
+		output := map[string]interface{}{
 			"pairs":     jsonPairs,
 			"count":     len(jsonPairs),
 			"method":    method,
 			"threshold": threshold,
-		})
+		}
+		scope.addJSON(output)
+		return outputJSON(output)
 	}
 
 	if len(pairs) == 0 {
 		fmt.Printf("No similar issues found (threshold: %.0f%%)\n", threshold*100)
+		if notice := scope.skippedNotice(); notice != "" {
+			fmt.Println(notice)
+		}
 		return nil
 	}
 
 	fmt.Printf("%s Found %d potential duplicate pair(s) (threshold: %.0f%%):\n\n",
 		ui.RenderWarn("🔍"), len(pairs), threshold*100)
+	if notice := scope.skippedNotice(); notice != "" {
+		fmt.Printf("%s\n\n", notice)
+	}
 
 	for i, p := range pairs {
 		pct := p.Similarity * 100

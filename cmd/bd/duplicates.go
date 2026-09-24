@@ -20,11 +20,19 @@ Groups issues by content hash and reports duplicates with suggested merge target
 The merge target is chosen by:
 1. Reference count (most referenced issue wins)
 2. Lexicographically smallest ID if reference counts are equal
-Only groups issues with matching status (open with open, closed with closed).
+Only non-closed issues are considered.
+
+Orchestrator-managed workflow beads (metadata carrying a key under one of the
+prefixes configured in dedup.workflow_metadata_prefixes, default "gc.", e.g.
+Gas City spec/logical/control template instances) are skipped: their identical
+template text is owned by the orchestrator lifecycle, not by content
+deduplication. Pass --include-workflow to include them anyway.
+
 Example:
   bd duplicates                    # Show all duplicate groups
   bd duplicates --auto-merge       # Automatically merge all duplicates
-  bd duplicates --dry-run          # Show what would be merged`,
+  bd duplicates --dry-run          # Show what would be merged
+  bd duplicates --include-workflow # Also consider orchestrator-managed beads`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, _ []string) error {
@@ -37,9 +45,10 @@ Example:
 
 		autoMerge, _ := cmd.Flags().GetBool("auto-merge")
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
+		includeWorkflow, _ := cmd.Flags().GetBool("include-workflow")
 
 		if usesProxiedServer() {
-			return runDuplicatesProxiedServer(rootCtx, autoMerge, dryRun)
+			return runDuplicatesProxiedServer(rootCtx, autoMerge, dryRun, includeWorkflow)
 		}
 
 		if autoMerge && !dryRun {
@@ -51,9 +60,13 @@ Example:
 		if err != nil {
 			return HandleError("fetching issues: %v", err)
 		}
-		duplicateGroups := findDuplicateGroups(openIssuesOf(allIssues))
+		candidates, scope, err := scopeWorkflowIssues(openIssuesOf(allIssues), includeWorkflow)
+		if err != nil {
+			return HandleError("classifying workflow issues: %v", err)
+		}
+		duplicateGroups := findDuplicateGroups(candidates)
 		if len(duplicateGroups) == 0 {
-			return outputNoDuplicates()
+			return outputNoDuplicates(scope)
 		}
 		refCounts := countReferences(allIssues)
 		depCounts, _ := store.GetDependencyCounts(ctx, collectDuplicateGroupIDs(duplicateGroups))
@@ -64,7 +77,7 @@ Example:
 			mergeResults = executeDuplicateMerges(duplicateGroups, refCounts, structuralScores)
 			commandDidWrite.Store(true)
 		}
-		return outputDuplicates(duplicateGroups, refCounts, structuralScores, autoMerge, dryRun, mergeResults)
+		return outputDuplicates(duplicateGroups, refCounts, structuralScores, autoMerge, dryRun, mergeResults, scope)
 	},
 }
 
@@ -88,15 +101,20 @@ func collectDuplicateGroupIDs(groups [][]*types.Issue) []string {
 	return ids
 }
 
-func outputNoDuplicates() error {
+func outputNoDuplicates(scope workflowScope) error {
 	if !jsonOutput {
 		fmt.Println("No duplicates found!")
+		if notice := scope.skippedNotice(); notice != "" {
+			fmt.Println(notice)
+		}
 		return nil
 	}
-	return outputJSON(map[string]interface{}{
+	output := map[string]interface{}{
 		"duplicate_groups": 0,
 		"groups":           []interface{}{},
-	})
+	}
+	scope.addJSON(output)
+	return outputJSON(output)
 }
 
 func executeDuplicateMerges(duplicateGroups [][]*types.Issue, refCounts map[string]int, structuralScores map[string]*issueScore) []map[string]interface{} {
@@ -114,7 +132,7 @@ func executeDuplicateMerges(duplicateGroups [][]*types.Issue, refCounts map[stri
 	return mergeResults
 }
 
-func outputDuplicates(duplicateGroups [][]*types.Issue, refCounts map[string]int, structuralScores map[string]*issueScore, autoMerge, dryRun bool, mergeResults []map[string]interface{}) error {
+func outputDuplicates(duplicateGroups [][]*types.Issue, refCounts map[string]int, structuralScores map[string]*issueScore, autoMerge, dryRun bool, mergeResults []map[string]interface{}, scope workflowScope) error {
 	var mergeCommands []string
 	for _, group := range duplicateGroups {
 		target := chooseMergeTarget(group, refCounts, structuralScores)
@@ -138,6 +156,7 @@ func outputDuplicates(duplicateGroups [][]*types.Issue, refCounts map[string]int
 			"duplicate_groups": len(duplicateGroups),
 			"groups":           formatDuplicateGroupsJSON(duplicateGroups, refCounts, structuralScores),
 		}
+		scope.addJSON(output)
 		if autoMerge || dryRun {
 			output["merge_commands"] = mergeCommands
 			if autoMerge && !dryRun {
@@ -147,6 +166,9 @@ func outputDuplicates(duplicateGroups [][]*types.Issue, refCounts map[string]int
 		return outputJSON(output)
 	}
 	fmt.Printf("%s Found %d duplicate group(s):\n\n", ui.RenderWarn("🔍"), len(duplicateGroups))
+	if notice := scope.skippedNotice(); notice != "" {
+		fmt.Printf("%s\n\n", notice)
+	}
 	for i, group := range duplicateGroups {
 		target := chooseMergeTarget(group, refCounts, structuralScores)
 		fmt.Printf("%s Group %d: %s\n", ui.RenderAccent("━━"), i+1, group[0].Title)
@@ -188,6 +210,7 @@ func outputDuplicates(duplicateGroups [][]*types.Issue, refCounts map[string]int
 func init() {
 	duplicatesCmd.Flags().Bool("auto-merge", false, "Automatically merge all duplicates")
 	duplicatesCmd.Flags().Bool("dry-run", false, "Show what would be merged without making changes")
+	duplicatesCmd.Flags().Bool("include-workflow", false, "Also consider orchestrator-managed workflow beads (metadata keys under dedup.workflow_metadata_prefixes); they are skipped by default")
 	rootCmd.AddCommand(duplicatesCmd)
 }
 
