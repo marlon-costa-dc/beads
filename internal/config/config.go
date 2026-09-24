@@ -363,6 +363,12 @@ func Initialize() error {
 	// Maps project names to paths for resolving external: blocked_by references
 	v.SetDefault("external_projects", map[string]string{})
 
+	// Jira epic-link field: the field CreateIssue sets to nest a created
+	// issue under jira.epic_key. "parent" is correct for Jira Cloud/
+	// next-gen projects; classic Jira projects use a custom field
+	// (e.g. "customfield_10014") and must override this key.
+	v.SetDefault("jira.epic_link_field", "parent")
+
 	// Load config files: lowest priority first, each MergeInConfig overwrites
 	if len(configPaths) > 0 {
 		v.SetConfigFile(configPaths[0])

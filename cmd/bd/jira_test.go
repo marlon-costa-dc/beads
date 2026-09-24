@@ -61,3 +61,15 @@ func TestJiraSyncResult(t *testing.T) {
 		t.Errorf("expected Warnings to be empty, got %v", result.Warnings)
 	}
 }
+
+// TestJiraSyncStateFlagDefaultsToOpen guards the `bd jira sync` default:
+// without --state, only open issues sync, matching the documented default.
+func TestJiraSyncStateFlagDefaultsToOpen(t *testing.T) {
+	flag := jiraSyncCmd.Flags().Lookup("state")
+	if flag == nil {
+		t.Fatal("jiraSyncCmd has no --state flag registered")
+	}
+	if flag.DefValue != "open" {
+		t.Errorf("--state default = %q, want %q", flag.DefValue, "open")
+	}
+}
