@@ -19,37 +19,45 @@ permissions:
   contents: write
 
 jobs:
-  require-fork-config:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require fork topology variables
-        run: |
-          set -euo pipefail
-          missing=()
-          [ -n "${{ vars.FORK_REPOSITORY }}" ] || missing+=("FORK_REPOSITORY")
-          [ -n "${{ vars.UPSTREAM_REPOSITORY }}" ] || missing+=("UPSTREAM_REPOSITORY")
-          [ -n "${{ vars.FORK_INTEGRATION_BRANCH }}" ] || missing+=("FORK_INTEGRATION_BRANCH")
-          if [ "${#missing[@]}" -gt 0 ]; then
-            echo "::error::missing repository variable(s): ${missing[*]}" >&2
-            exit 1
-          fi
-
   audit:
-    needs: require-fork-config
-    if: github.repository == vars.FORK_REPOSITORY
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout fork integration branch
+      - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
-          ref: ${{ vars.FORK_INTEGRATION_BRANCH }}
           fetch-depth: 0
+
+      - name: Resolve fork topology from GitHub
+        # The topology is GitHub's own record of this repository, read at run
+        # time, never a stored setting: a fork (isFork), its upstream
+        # (parent), and its integration branch (default_branch).
+        id: topology
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_json=$(gh api "repos/${GITHUB_REPOSITORY}")
+          is_fork=$(jq -r '.fork' <<<"$repo_json")
+          if [ "$is_fork" != "true" ]; then
+            echo "::error::${GITHUB_REPOSITORY} is not a fork; the upstream topology audit applies only to forks" >&2
+            exit 1
+          fi
+          upstream=$(jq -r '.parent.full_name' <<<"$repo_json")
+          integration_branch=$(jq -r '.default_branch' <<<"$repo_json")
+          if [ -z "$upstream" ] || [ "$upstream" = "null" ] || [ -z "$integration_branch" ] || [ "$integration_branch" = "null" ]; then
+            echo "::error::GitHub returned no parent or default branch for ${GITHUB_REPOSITORY}" >&2
+            exit 1
+          fi
+          {
+            echo "upstream=$upstream"
+            echo "integration_branch=$integration_branch"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Fetch canonical upstream and fork topology
         env:
           GH_TOKEN: ${{ github.token }}
-          UPSTREAM_REPOSITORY: ${{ vars.UPSTREAM_REPOSITORY }}
-          FORK_INTEGRATION_BRANCH: ${{ vars.FORK_INTEGRATION_BRANCH }}
+          UPSTREAM_REPOSITORY: ${{ steps.topology.outputs.upstream }}
+          FORK_INTEGRATION_BRANCH: ${{ steps.topology.outputs.integration_branch }}
         run: |
           set -euo pipefail
           git remote add canonical "https://github.com/${UPSTREAM_REPOSITORY}.git"
@@ -67,6 +75,7 @@ jobs:
           integration_base=$(git merge-base "origin/$FORK_INTEGRATION_BRANCH" "$latest_release")
 
           {
+            echo "upstream=$UPSTREAM_REPOSITORY"
             echo "upstream_main=$upstream_main"
             echo "fork_main=$fork_main"
             echo "latest_tag=$latest_tag"
