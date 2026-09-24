@@ -4,12 +4,15 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/steveyegge/beads/internal/metrics"
 )
@@ -410,13 +413,41 @@ func allCommandEvents(t *testing.T, home string) []string {
 
 func runBdForMetrics(t *testing.T, bd, repo, home string, args ...string) (stdout, stderr string) {
 	t.Helper()
-	cmd := exec.Command(bd, args...)
+	// A stalled bd subprocess must fail the test, not hang the whole package:
+	// every other subprocess helper here bounds its command, and so does this
+	// one. Bound to the test's own -timeout deadline (with headroom so a
+	// genuine stall still gets t.Fatalf's diagnostic instead of the test
+	// binary's own deadline panic); fall back to 120s when no deadline is
+	// set. A healthy metrics invocation finishes in seconds; 120s comfortably
+	// covers a cold embedded-init.
+	timeout := 120 * time.Second
+	if dl, ok := t.Deadline(); ok {
+		const margin = 5 * time.Second
+		if remaining := time.Until(dl); remaining > 0 {
+			if remaining > margin {
+				timeout = remaining - margin
+			} else {
+				timeout = remaining
+			}
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bd, args...)
 	cmd.Dir = repo
 	cmd.Env = metricsTestEnv(home)
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
-	_ = cmd.Run()
+	if err := cmd.Run(); err != nil {
+		// Non-zero bd exits are expected by several callers (commands that
+		// deliberately fail); only a stall — the context deadline — and
+		// start failures are fatal.
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || ctx.Err() != nil {
+			t.Fatalf("bd %v in %s: %v\nstdout: %s\nstderr: %s", args, repo, err, outBuf.String(), errBuf.String())
+		}
+	}
 	return outBuf.String(), errBuf.String()
 }
 
