@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/steveyegge/beads/internal/git"
 	"github.com/steveyegge/beads/internal/storage"
 )
 
@@ -246,6 +247,15 @@ func TestShowDoltBackupStatusJSON_NilWhenNotConfigured(t *testing.T) {
 	// .beads/dolt-backup.json, which must not leak into this test.
 	// Serial on purpose: t.Chdir swaps the process-wide working directory.
 	t.Chdir(t.TempDir())
+	// Two more process-wide channels reach FindBeadsDir besides the cwd:
+	// BEADS_DIR, which in-process CLI dispatch in this package sets without
+	// restoring, and internal/git's repository caches, primed from the package
+	// directory. When that is a linked worktree, the stale cache routes the
+	// worktree fallback to the main checkout's .beads. Clear both, so the
+	// test sees exactly the empty temp directory it created.
+	t.Setenv("BEADS_DIR", "")
+	git.ResetCaches()
+	t.Cleanup(git.ResetCaches)
 	// When no .beads dir exists, should return configured=false
 	result := showDoltBackupStatusJSON()
 	configured, ok := result["configured"].(bool)
