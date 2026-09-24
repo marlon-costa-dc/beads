@@ -22,11 +22,11 @@ env:
   BD_DISABLE_EVENT_FLUSH: "1"
 
 jobs:
-  # The repository that owns releases is configuration, not code: the
-  # RELEASE_REPOSITORY Actions variable (owner/name). An unset or malformed
-  # value fails the run here. Every other job descends from
-  # verify-version-consistency, which runs only for a v* tag in that
-  # repository, so a clone or a branch dispatch publishes nothing.
+  # A release is published by the repository whose v* tag triggered the run:
+  # owner, name and repository are that run's own identity (GITHUB_REPOSITORY),
+  # never a separate setting. Every other job descends from
+  # verify-version-consistency, which runs only for a v* tag, so a branch
+  # dispatch publishes nothing.
   release-target:
     runs-on: ubuntu-latest
     outputs:
@@ -37,26 +37,17 @@ jobs:
     steps:
       - name: Resolve release repository
         id: target
-        env:
-          RELEASE_REPOSITORY: ${{ vars.RELEASE_REPOSITORY }}
         run: |
-          if [ -z "$RELEASE_REPOSITORY" ]; then
-            echo "::error::Actions variable RELEASE_REPOSITORY is not set; set it to the owner/name of the repository that publishes releases" >&2
-            exit 1
-          fi
-          if ! [[ $RELEASE_REPOSITORY =~ ^([A-Za-z0-9-]+)/([A-Za-z0-9._-]+)$ ]]; then
-            echo "::error::Actions variable RELEASE_REPOSITORY='$RELEASE_REPOSITORY' is not owner/name" >&2
+          if ! [[ $GITHUB_REPOSITORY =~ ^([A-Za-z0-9-]+)/([A-Za-z0-9._-]+)$ ]]; then
+            echo "::error::GITHUB_REPOSITORY='$GITHUB_REPOSITORY' is not owner/name" >&2
             exit 1
           fi
           {
             echo "owner=${BASH_REMATCH[1]}"
             echo "name=${BASH_REMATCH[2]}"
-            echo "repository=$RELEASE_REPOSITORY"
+            echo "repository=$GITHUB_REPOSITORY"
           } >> "$GITHUB_OUTPUT"
-          if [ "$GITHUB_REPOSITORY" != "$RELEASE_REPOSITORY" ]; then
-            echo "::notice::$GITHUB_REPOSITORY is not the release repository $RELEASE_REPOSITORY; nothing is published"
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-          elif [[ $GITHUB_REF != refs/tags/v* ]]; then
+          if [[ $GITHUB_REF != refs/tags/v* ]]; then
             echo "::notice::$GITHUB_REF is not a v* tag; nothing is published"
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           else
