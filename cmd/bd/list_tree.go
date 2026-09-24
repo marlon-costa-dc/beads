@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/steveyegge/beads/internal/types"
+	"github.com/steveyegge/beads/internal/ui"
 	"github.com/steveyegge/beads/internal/utils"
 )
 
@@ -115,7 +116,29 @@ func compareIssuesByPriority(a, b *types.Issue) int {
 // Children are ordered by dependency then priority when dr != nil (--deps), else
 // by priority (P0 first) for intuitive reading. When dr is set, each node's
 // dependency edges are annotated just beneath it.
+//
+// The walk carries the two defenses renderTree (dep.go) already has: a visited
+// set scoped to the current ancestor path, and the shared depth ceiling
+// (defaultTreeMaxDepth). A child that reappears inside its own ancestry closes a
+// cycle and renders once, marked "(cycle)"; a node at the ceiling that still has
+// children renders with the same truncation marker renderTree uses. Neither case
+// is silent, and the walk always terminates.
 func printPrettyTree(childrenMap map[string][]*types.Issue, parentID string, prefix string, dr *depRender) {
+	printPrettyTreeGuarded(childrenMap, parentID, prefix, dr, map[string]bool{parentID: true}, 0)
+}
+
+// printPrettyTreeGuarded is printPrettyTree with the path-scoped visited set and
+// the depth of parentID. visited is scoped to the path, not to the whole walk: a
+// node legitimately reachable through two different parents still renders under
+// each, while a node that reappears inside its own ancestry is a cycle and is cut.
+func printPrettyTreeGuarded(
+	childrenMap map[string][]*types.Issue,
+	parentID string,
+	prefix string,
+	dr *depRender,
+	visited map[string]bool,
+	depth int,
+) {
 	children := childrenMap[parentID]
 
 	if dr != nil {
@@ -131,14 +154,30 @@ func printPrettyTree(childrenMap map[string][]*types.Issue, parentID string, pre
 		if isLast {
 			connector = "└── "
 		}
-		fmt.Printf("%s%s%s\n", prefix, connector, formatPrettyIssue(child))
-
 		extension := "│   "
 		if isLast {
 			extension = "    "
 		}
+
+		if visited[child.ID] {
+			fmt.Printf("%s%s%s %s\n", prefix, connector, formatPrettyIssue(child), ui.RenderMuted("(cycle)"))
+			continue
+		}
+
+		line := formatPrettyIssue(child)
+		atCeiling := depth+1 >= defaultTreeMaxDepth
+		if atCeiling && len(childrenMap[child.ID]) > 0 {
+			line += ui.RenderWarn(" …")
+		}
+		fmt.Printf("%s%s%s\n", prefix, connector, line)
 		dr.annotationsFor(child.ID, prefix+extension)
-		printPrettyTree(childrenMap, child.ID, prefix+extension, dr)
+		if atCeiling {
+			continue
+		}
+
+		visited[child.ID] = true
+		printPrettyTreeGuarded(childrenMap, child.ID, prefix+extension, dr, visited, depth+1)
+		delete(visited, child.ID)
 	}
 }
 
