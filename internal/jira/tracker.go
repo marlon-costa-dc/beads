@@ -242,6 +242,34 @@ func (t *Tracker) CreateIssue(ctx context.Context, issue *types.Issue) (*tracker
 	// Set project to primary (first) project key.
 	fields["project"] = map[string]string{"key": t.PrimaryProjectKey()}
 
+	// Epic-link: when configured, nest every created issue under the project
+	// epic so the Jira mirror groups fleet work under one parent. Without
+	// this, created issues land outside the epic and the ledger cannot see
+	// them (external_ref is still written back by the sync engine).
+	//
+	// The field that carries the parent link differs by Jira edition: Cloud
+	// and next-gen projects use "parent" (the config default); classic Jira
+	// projects use an Epic Link custom field (e.g. "customfield_10014") set
+	// via jira.epic_link_field / JIRA_EPIC_LINK_FIELD.
+	epicKey, err := t.getConfig(ctx, "jira.epic_key", "JIRA_EPIC_KEY")
+	if err != nil {
+		return nil, err
+	}
+	if epicKey != "" {
+		epicLinkField, err := t.getConfig(ctx, "jira.epic_link_field", "JIRA_EPIC_LINK_FIELD")
+		if err != nil {
+			return nil, err
+		}
+		if epicLinkField == "" {
+			epicLinkField = config.GetString("jira.epic_link_field")
+		}
+		epicLinkField = strings.TrimSpace(epicLinkField)
+		if epicLinkField == "" {
+			return nil, fmt.Errorf("jira.epic_key %q is configured but jira.epic_link_field is empty; set it to the Jira field that carries the epic link (\"parent\" for Cloud/next-gen, or the classic Epic Link custom field id)", epicKey)
+		}
+		fields[epicLinkField] = map[string]string{"key": epicKey}
+	}
+
 	created, err := t.client.CreateIssue(ctx, fields)
 	if err != nil {
 		return nil, err
