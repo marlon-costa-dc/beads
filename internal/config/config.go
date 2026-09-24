@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/steveyegge/beads/internal/debug"
+	"github.com/steveyegge/beads/internal/discoveryceiling"
 	"gopkg.in/yaml.v3"
 )
 
@@ -155,6 +156,7 @@ func Initialize() error {
 		}
 
 		// Walk up parent directories to find .beads/config.yaml.
+		ceiling := discoveryceiling.For(cwd)
 		for dir := cwd; dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
 			p := filepath.Join(dir, ".beads", "config.yaml")
 			if _, err := os.Stat(p); err == nil {
@@ -173,6 +175,9 @@ func Initialize() error {
 				// outside this repo entirely (e.g. an outer orchestration
 				// project's own unrelated .beads/config.yaml) and must never
 				// leak into a beads-under-test process (be-yjp4z).
+				break
+			}
+			if discoveryceiling.Reached(dir, ceiling) {
 				break
 			}
 		}

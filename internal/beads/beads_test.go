@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/steveyegge/beads/internal/configfile"
+	"github.com/steveyegge/beads/internal/discoveryceiling"
 	"github.com/steveyegge/beads/internal/git"
 	"github.com/steveyegge/beads/internal/utils"
 )
@@ -43,6 +44,33 @@ func TestFindDatabasePathEnvVar(t *testing.T) {
 	expectedPath, _ := filepath.Abs(testPath)
 	if result != expectedPath {
 		t.Errorf("Expected '%s', got '%s'", expectedPath, result)
+	}
+}
+
+func TestFindBeadsDirFromHonorsDiscoveryCeiling(t *testing.T) {
+	outer := t.TempDir()
+	outerBeads := filepath.Join(outer, ".beads")
+	if err := os.MkdirAll(outerBeads, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outerBeads, "metadata.json"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ceiling := filepath.Join(outer, "sandbox")
+	start := filepath.Join(ceiling, "tmp", "case")
+	if err := os.MkdirAll(start, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without the ceiling the walk reaches the outer ledger...
+	t.Setenv(discoveryceiling.Env, "")
+	if got := FindBeadsDirFrom(start); got == "" {
+		t.Fatalf("precondition: FindBeadsDirFrom found nothing; the outer ledger %q must be reachable without a ceiling", outerBeads)
+	}
+	// ...and with it the walk stops at the sandbox root.
+	t.Setenv(discoveryceiling.Env, ceiling)
+	if got := FindBeadsDirFrom(start); got != "" {
+		t.Fatalf("FindBeadsDirFrom escaped the discovery ceiling: got %q, outer ledger %q", got, outerBeads)
 	}
 }
 

@@ -28,6 +28,17 @@ the fast PR-core contract even on shared agent hosts. Set
 tests through these broad wrappers, or `BEADS_TEST_ENV_DISABLE=1` when debugging
 against your real local configuration.
 
+The disposable root lives under `${XDG_CACHE_HOME:-$HOME/.cache}/beads/test-tmp`
+(override with `BEADS_TEST_TMP_BASE`), never system `/tmp`, and is removed on
+exit; `TMPDIR` and `GOTMPDIR` point inside it. Because that root can sit below a
+developer's real `~/.beads`, the wrapper also sets
+`BEADS_TEST_DISCOVERY_CEILING` to it: every ancestor walk for beads state that
+starts inside the root stops there, while discovery from the source checkout is
+unchanged. The Docker endpoint selected by the caller's current context is
+pinned in `DOCKER_HOST` before HOME is replaced, so container-backed Dolt tests
+still reach the daemon. The coverage profile (`TEST_COVER=1`) defaults to
+`$XDG_CACHE_HOME/beads/beads.coverage.out` so it outlives the run.
+
 The broad Go wrappers also cap package and test parallelism to `4` by default
 (`GO_TEST_PKG_PARALLEL` and `GO_TEST_PARALLEL`). This avoids turning high-core
 shared hosts into a different test topology than GitHub Actions.

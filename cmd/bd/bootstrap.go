@@ -21,6 +21,7 @@ import (
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/config"
 	"github.com/steveyegge/beads/internal/configfile"
+	"github.com/steveyegge/beads/internal/discoveryceiling"
 	"github.com/steveyegge/beads/internal/doltserver"
 	"github.com/steveyegge/beads/internal/metrics"
 	"github.com/steveyegge/beads/internal/storage"
@@ -1310,6 +1311,7 @@ func findParentConfig(beadsDir string) (*configfile.Config, error) {
 	// beadsDir is typically "<project>/.beads", so we start from <project>'s parent.
 	start := filepath.Dir(filepath.Dir(beadsDir))
 	homeDir, _ := os.UserHomeDir()
+	ceiling := discoveryceiling.For(start)
 
 	for dir := start; dir != "/" && dir != "."; {
 		candidate := filepath.Join(dir, ".beads")
@@ -1326,6 +1328,9 @@ func findParentConfig(beadsDir string) (*configfile.Config, error) {
 
 		// Don't search above $HOME
 		if homeDir != "" && dir == homeDir {
+			break
+		}
+		if discoveryceiling.Reached(dir, ceiling) {
 			break
 		}
 

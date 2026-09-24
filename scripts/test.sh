@@ -14,6 +14,12 @@ source "$REPO_ROOT/.buildflags"
 # shellcheck source=ci/lib/test-env.sh
 source "$REPO_ROOT/scripts/ci/lib/test-env.sh"
 
+# Resolved before the sandbox replaces HOME: artifacts that must outlive the
+# run (coverage) and scratch needed without the sandbox live here, never /tmp.
+BEADS_CACHE_DIR="$(beads_test_cache_dir)"
+BEADS_SCRATCH_DIR="$BEADS_CACHE_DIR/test-tmp"
+mkdir -p "$BEADS_SCRATCH_DIR"
+
 beads_test_env_enter
 
 # Build skip pattern from .test-skip file
@@ -23,8 +29,11 @@ build_skip_pattern() {
         return
     fi
 
-    # Read non-comment, non-empty lines and join with |
-    local pattern=$(grep -v '^#' "$SKIP_FILE" | grep -v '^[[:space:]]*$' | paste -sd '|' -)
+    # Read non-comment, non-empty lines and join with |. awk exits 0 when no
+    # line survives the filter, so a comment-only file yields an empty pattern
+    # instead of a pipefail abort.
+    local pattern
+    pattern=$(awk '!/^#/ && !/^[[:space:]]*$/' "$SKIP_FILE" | paste -sd '|' -)
     echo "$pattern"
 }
 
@@ -49,7 +58,7 @@ SKIP_PATTERN=$(build_skip_pattern)
 VERBOSE="${TEST_VERBOSE:-}"
 RUN_PATTERN="${TEST_RUN:-}"
 COVERAGE="${TEST_COVER:-}"
-COVERPROFILE="${TEST_COVERPROFILE:-/tmp/beads.coverage.out}"
+COVERPROFILE="${TEST_COVERPROFILE:-$BEADS_CACHE_DIR/beads.coverage.out}"
 COVERPKG="${TEST_COVERPKG:-}"
 
 # Parse arguments
@@ -104,7 +113,7 @@ if [[ -z "${BEADS_TEST_BD_BINARY:-}" ]]; then
             if [[ -n "${BEADS_TEST_ENV_ROOT:-}" ]]; then
                 PREBUILT_BD_DIR="$BEADS_TEST_ENV_ROOT/prebuilt-bd"
             else
-                PREBUILT_BD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/beads-prebuilt-bd-XXXXXX")
+                PREBUILT_BD_DIR=$(mktemp -d "$BEADS_SCRATCH_DIR/beads-prebuilt-bd-XXXXXX")
             fi
             mkdir -p "$PREBUILT_BD_DIR"
             echo "Prebuilding bd for subprocess tests..." >&2
@@ -125,7 +134,7 @@ fi
 # This reduces 8-16+ concurrent dolt processes down to 1.
 if [[ "${BEADS_TEST_SHARED_SERVER:-}" == "1" && -z "${BEADS_DOLT_PORT:-}" ]]; then
     if command -v dolt &>/dev/null; then
-        SHARED_DOLT_DIR=$(mktemp -d /tmp/beads-shared-test-dolt-XXXXXX)
+        SHARED_DOLT_DIR=$(mktemp -d "$BEADS_SCRATCH_DIR/beads-shared-test-dolt-XXXXXX")
         DOLT_ROOT_PATH="$SHARED_DOLT_DIR"
         export DOLT_ROOT_PATH
 
@@ -144,7 +153,7 @@ if [[ "${BEADS_TEST_SHARED_SERVER:-}" == "1" && -z "${BEADS_DOLT_PORT:-}" ]]; th
         SHARED_DOLT_PID=$!
 
         # Wait for server to accept connections (up to 30s)
-        for i in $(seq 1 60); do
+        for _ in $(seq 1 60); do
             if nc -z 127.0.0.1 "$SHARED_PORT" 2>/dev/null; then
                 break
             fi
@@ -155,12 +164,8 @@ if [[ "${BEADS_TEST_SHARED_SERVER:-}" == "1" && -z "${BEADS_DOLT_PORT:-}" ]]; th
             export BEADS_DOLT_PORT="$SHARED_PORT"
             export BEADS_TEST_MODE=1
             echo "Shared test Dolt server started on port $SHARED_PORT (PID $SHARED_DOLT_PID)" >&2
-            cleanup_shared_server() {
-                kill "$SHARED_DOLT_PID" 2>/dev/null || true
-                wait "$SHARED_DOLT_PID" 2>/dev/null || true
-                rm -rf "$SHARED_DOLT_DIR"
-            }
-            trap 'cleanup_shared_server; beads_test_env_cleanup' EXIT
+            # Replaces the sandbox trap, so it also runs the sandbox cleanup.
+            trap 'kill "$SHARED_DOLT_PID" 2>/dev/null || true; wait "$SHARED_DOLT_PID" 2>/dev/null || true; rm -rf "$SHARED_DOLT_DIR"; beads_test_env_cleanup' EXIT
         else
             echo "WARN: shared Dolt server failed to start, falling back to per-package servers" >&2
             kill "$SHARED_DOLT_PID" 2>/dev/null || true

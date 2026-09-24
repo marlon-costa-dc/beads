@@ -10,6 +10,7 @@ import (
 
 	"github.com/steveyegge/beads/internal/beads"
 	"github.com/steveyegge/beads/internal/configfile"
+	"github.com/steveyegge/beads/internal/discoveryceiling"
 	"github.com/steveyegge/beads/internal/doltserver"
 	"github.com/steveyegge/beads/internal/git"
 	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
@@ -245,11 +246,15 @@ func guardUndiscoveredLegacyWorkspace() error {
 	}
 	dir := utils.CanonicalizePath(cwd)
 	boundary := utils.CanonicalizePath(git.GetRepoRoot())
+	ceiling := discoveryceiling.For(dir)
 	for {
 		if err := guardLegacyUpgradeWorkspace(filepath.Join(dir, ".beads")); err != nil {
 			return err
 		}
 		if boundary != "" && utils.PathsEqual(dir, boundary) {
+			return nil
+		}
+		if discoveryceiling.Reached(dir, ceiling) {
 			return nil
 		}
 		parent := filepath.Dir(dir)

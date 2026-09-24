@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/steveyegge/beads/internal/discoveryceiling"
 	"gopkg.in/yaml.v3"
 )
 
@@ -688,10 +689,14 @@ func findProjectBeadsDir() string {
 		return ""
 	}
 
+	ceiling := discoveryceiling.For(cwd)
 	for dir := cwd; dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
 		beadsDir := filepath.Join(dir, ".beads")
 		if info, err := os.Stat(beadsDir); err == nil && info.IsDir() {
 			return beadsDir
+		}
+		if discoveryceiling.Reached(dir, ceiling) {
+			break
 		}
 	}
 
