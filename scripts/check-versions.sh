@@ -25,7 +25,19 @@ MISMATCH=0
 # numeric, so they carry this rather than $CANONICAL.
 BASE_VERSION="${CANONICAL%%-*}"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source-path=SCRIPTDIR source=lib/python-version.sh
+source "$SCRIPT_DIR/lib/python-version.sh"
+
+# PEP 440 form carried by the MCP package (pyproject.toml, __init__.py and the
+# uv.lock pin) — the same projection update-versions.sh writes.
+PYTHON_VERSION=$(python_version "$CANONICAL")
+
 check_expected() {
+    if [ $# -ne 4 ]; then
+        echo -e "${RED}❌ check_expected: expected <file> <version> <expected> <description>, got $# arguments${NC}" >&2
+        exit 2
+    fi
     local _file=$1
     local version=$2
     local expected=$3
@@ -44,13 +56,13 @@ check_version() {
 }
 
 # Check all version files
-check_version "integrations/beads-mcp/pyproject.toml" \
+check_expected "integrations/beads-mcp/pyproject.toml" \
     "$(grep '^version = ' integrations/beads-mcp/pyproject.toml 2>/dev/null | sed 's/.*"\(.*\)".*/\1/')" \
-    "MCP pyproject.toml"
+    "$PYTHON_VERSION" "MCP pyproject.toml"
 
-check_version "integrations/beads-mcp/src/beads_mcp/__init__.py" \
+check_expected "integrations/beads-mcp/src/beads_mcp/__init__.py" \
     "$(grep '__version__ = ' integrations/beads-mcp/src/beads_mcp/__init__.py 2>/dev/null | sed 's/.*"\(.*\)".*/\1/')" \
-    "MCP __init__.py"
+    "$PYTHON_VERSION" "MCP __init__.py"
 
 check_version "plugins/beads/.claude-plugin/plugin.json" \
     "$(jq -r '.version' plugins/beads/.claude-plugin/plugin.json 2>/dev/null)" \
@@ -85,9 +97,9 @@ check_version "npm-package/package.json" \
 # check is dependency-free; the fuller `uv lock --check` runs when uv is
 # available and also catches dependency edits made without a relock.
 #
-# uv.lock records the PEP 440-normalized version (1.1.0-rc.1 → 1.1.0rc1), so
-# normalize the canonical form before comparing.
-LOCK_EXPECTED=$(printf '%s' "$CANONICAL" | sed -E 's/-rc\.?/rc/')
+# uv.lock records the PEP 440-normalized version (1.1.0-rc.1 → 1.1.0rc1,
+# 1.3.0-fd.1 → 1.3.0+fd.1), which is the projection computed above.
+LOCK_EXPECTED=$PYTHON_VERSION
 LOCK_VERSION=$(awk -F '"' '/^name = "beads-mcp"$/ { found=1; next } found && /^version = / { print $2; exit }' integrations/beads-mcp/uv.lock 2>/dev/null)
 if [ "$LOCK_VERSION" != "$LOCK_EXPECTED" ]; then
     echo -e "${RED}❌ MCP uv.lock (beads-mcp pin): ${LOCK_VERSION:-missing} (expected $LOCK_EXPECTED) — run: uv lock --directory integrations/beads-mcp${NC}"
@@ -162,8 +174,8 @@ if [ $MISMATCH -eq 1 ]; then
     echo "most of these. It derives the OLD version from cmd/bd/version.go, which"
     echo "already reads $CANONICAL, so its old->new substitutions rewrite"
     echo "$CANONICAL -> $CANONICAL and no-op on a file that drifted. Only the"
-    echo ".githooks markers (rewritten wholesale) and uv.lock (regenerated) heal"
-    echo "on a re-run."
+    echo ".githooks markers and the MCP pyproject.toml/__init__.py versions"
+    echo "(rewritten wholesale) and uv.lock (regenerated) heal on a re-run."
     echo ""
     echo "Fix whichever applies:"
     echo "  • cmd/bd/version.go itself is wrong (you meant another version):"

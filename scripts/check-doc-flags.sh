@@ -93,9 +93,6 @@ echo ""
 # --- Check 2: bd init flags ---
 echo "=== Check 2: bd init flags ==="
 
-# Get actual init flags
-INIT_FLAGS=$($BD init --help 2>&1 | grep -oP '^\s+--[a-z][a-z0-9-]*' | sed 's/^\s*//' || true)
-
 # Check for --branch on init (removed)
 BRANCH_REFS=$(grep -rn 'bd init.*--branch' \
     "$PROJECT_ROOT"/docs/*.md \
@@ -120,22 +117,91 @@ echo ""
 # --- Check 3: SQLite/legacy database paths ---
 echo "=== Check 3: Legacy storage references ==="
 
-SQLITE_REFS=$(grep -rn 'beads\.db\|default\.db\|sqlite3.*\.beads\|\.beads/.*\.db' \
+# A finding is a stale reference unless its line reads as history (the
+# keyword filter below) or matches an entry of the explicit allow-list. The
+# allow-list holds one extended regex per line, matched against
+# "<repo-relative path>:<line>:<text>"; every entry must still match a
+# finding, so an exemption dies with the text it exempted.
+SQLITE_ALLOWLIST="$SCRIPT_DIR/check-doc-flags-storage-allowlist.txt"
+if [ ! -f "$SQLITE_ALLOWLIST" ]; then
+    echo "FAIL: storage reference allow-list is missing: ${SQLITE_ALLOWLIST#"$PROJECT_ROOT"/}"
+    exit 1
+fi
+# Exit status 2 means the regex does not compile.
+regex_match_empty() {
+    [[ "" =~ $1 ]]
+}
+SQLITE_ALLOW=()
+while IFS= read -r pattern || [ -n "$pattern" ]; do
+    if [[ $pattern =~ ^[[:space:]]*(#|$) ]]; then
+        continue
+    fi
+    regex_rc=0
+    regex_match_empty "$pattern" || regex_rc=$?
+    if [ "$regex_rc" -eq 2 ]; then
+        echo "FAIL: invalid regex in ${SQLITE_ALLOWLIST#"$PROJECT_ROOT"/}: $pattern"
+        exit 1
+    fi
+    SQLITE_ALLOW+=("$pattern")
+done < "$SQLITE_ALLOWLIST"
+
+sqlite_grep_rc=0
+SQLITE_RAW=$(grep -rn 'beads\.db\|default\.db\|sqlite3.*\.beads\|\.beads/.*\.db' \
     "$PROJECT_ROOT"/docs/*.md \
     "$PROJECT_ROOT"/docs/*/*.md \
     "$PROJECT_ROOT"/AGENT_INSTRUCTIONS.md \
     "$PROJECT_ROOT"/AGENTS.md \
-    "$PROJECT_ROOT"/README.md \
-    2>/dev/null \
-    | grep -v 'CHANGELOG\|removed\|legacy\|migration\|migrate\|was removed\|pre-\|old\|deprecated' \
-    || true)
+    "$PROJECT_ROOT"/README.md) || sqlite_grep_rc=$?
+if [ "$sqlite_grep_rc" -gt 1 ]; then
+    echo "FAIL: scanning docs for storage references failed (grep exit $sqlite_grep_rc)"
+    exit "$sqlite_grep_rc"
+fi
+
+SQLITE_HISTORY_RE='CHANGELOG|removed|legacy|migration|migrate|pre-|old|deprecated'
+SQLITE_REFS=""
+SQLITE_ALLOW_HITS=()
+for i in "${!SQLITE_ALLOW[@]}"; do
+    SQLITE_ALLOW_HITS[i]=0
+done
+while IFS= read -r ref; do
+    if [ -z "$ref" ]; then
+        continue
+    fi
+    ref="${ref#"$PROJECT_ROOT"/}"
+    if [[ $ref =~ $SQLITE_HISTORY_RE ]]; then
+        continue
+    fi
+    allowed=0
+    for i in "${!SQLITE_ALLOW[@]}"; do
+        if [[ $ref =~ ${SQLITE_ALLOW[i]} ]]; then
+            allowed=1
+            SQLITE_ALLOW_HITS[i]=1
+        fi
+    done
+    if [ "$allowed" -eq 0 ]; then
+        SQLITE_REFS+="$ref"$'\n'
+    fi
+done <<< "$SQLITE_RAW"
+
+SQLITE_STALE_ALLOW=""
+for i in "${!SQLITE_ALLOW[@]}"; do
+    if [ "${SQLITE_ALLOW_HITS[i]}" -eq 0 ]; then
+        SQLITE_STALE_ALLOW+="  ${SQLITE_ALLOW[i]}"$'\n'
+    fi
+done
 
 if [ -n "$SQLITE_REFS" ]; then
-    echo "WARN: Found possible legacy SQLite/database references:"
-    echo "$SQLITE_REFS" | head -20
-    # Don't increment ERRORS — these may be intentional migration docs
+    echo "FAIL: Found stale SQLite/database references:"
+    printf '%s' "$SQLITE_REFS" | head -20
+    echo "  (a deliberate reference belongs in ${SQLITE_ALLOWLIST#"$PROJECT_ROOT"/})"
+    ERRORS=$((ERRORS + 1))
 else
     echo "PASS: No stale SQLite references"
+fi
+if [ -n "$SQLITE_STALE_ALLOW" ]; then
+    echo "FAIL: allow-list entries in ${SQLITE_ALLOWLIST#"$PROJECT_ROOT"/} match no reference; remove them:"
+    printf '%s' "$SQLITE_STALE_ALLOW"
+    ERRORS=$((ERRORS + 1))
 fi
 
 echo ""
@@ -146,7 +212,7 @@ echo "=== Check 4: CLI command docs coverage and freshness ==="
 CLI_REF="$PROJECT_ROOT/docs/CLI_REFERENCE.md"
 if [ -f "$CLI_REF" ]; then
     TMPDIR_CHECK=$(mktemp -d)
-    trap "rm -rf $TMPDIR_CHECK" EXIT
+    trap 'rm -rf "$TMPDIR_CHECK"' EXIT
     if run_bounded "$BD" help --list > "$TMPDIR_CHECK/help-cmds.txt" 2>/dev/null; then
         sort -u "$TMPDIR_CHECK/help-cmds.txt" -o "$TMPDIR_CHECK/help-cmds.txt"
 
@@ -172,11 +238,11 @@ if [ -f "$CLI_REF" ]; then
 
             MISSING_WEBSITE=$(comm -23 "$TMPDIR_CHECK/help-cmds.txt" "$TMPDIR_CHECK/website-cmds.txt" || true)
             if [ -n "$MISSING_WEBSITE" ]; then
-                echo "FAIL: Live CLI commands missing from ${dir#$PROJECT_ROOT/}:"
+                echo "FAIL: Live CLI commands missing from ${dir#"$PROJECT_ROOT"/}:"
                 echo "$MISSING_WEBSITE" | sed 's/^/  bd /' | head -50
                 ERRORS=$((ERRORS + 1))
             else
-                echo "PASS: ${dir#$PROJECT_ROOT/} covers all live top-level CLI commands"
+                echo "PASS: ${dir#"$PROJECT_ROOT"/} covers all live top-level CLI commands"
             fi
         done
 

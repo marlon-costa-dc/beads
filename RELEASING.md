@@ -2,6 +2,13 @@
 
 This document describes the complete release process for beads, including GitHub releases, Homebrew, PyPI (MCP server), and npm packages.
 
+> **Fork distribution.** This fork publishes only GitHub Release assets, from
+> the repository named by the `RELEASE_REPOSITORY` Actions variable, under
+> `vX.Y.Z-fd.N` tags. Its release workflow has no Homebrew, PyPI or npm
+> publication, so the Homebrew, PyPI and npm steps below describe upstream's
+> process and do not apply here. See
+> [Update Version and Create Release Tag](#update-version-and-create-release-tag).
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -291,14 +298,16 @@ automatically.
 
 The tag workflow re-runs release-critical package gates before publishing:
 
-- `make ci-package-mcp` builds and validates the MCP package, then the PyPI job
-  publishes the validated `dist/*` artifact from that gate.
-- `make ci-package-npm` validates the npm wrapper package before npm publish.
-  publishes GitHub release assets.
+- `make ci-package-mcp` builds and validates the MCP package.
+- `make ci-package-npm` validates the npm wrapper package.
 
-The npm publish job also waits for the macOS release assets, because the npm
-`postinstall` script downloads platform-specific archives from the GitHub
-release.
+Then GoReleaser and the macOS job publish the GitHub release assets. This fork
+distributes only through its own GitHub Releases: the workflow has no PyPI or
+npm publish job and GoReleaser does not announce. The release runs only in the
+repository named by the `RELEASE_REPOSITORY` Actions variable (`owner/name`),
+and the first job fails when that variable is unset. Fork versions use the
+`X.Y.Z-fd.N` tag form; the MCP package carries its PEP 440 projection
+`X.Y.Z+fd.N` (`scripts/lib/python-version.sh`).
 
 **Recommended workflow:**
 

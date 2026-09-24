@@ -27,6 +27,7 @@ usage() {
     echo "Examples:"
     echo "  $0 0.47.1"
     echo "  $0 1.1.0-rc.1"
+    echo "  $0 1.3.0-fd.1   (fork release; MCP package becomes 1.3.0+fd.1)"
     echo ""
     echo "For full releases, use: bd mol wisp beads-release --var version=X.Y.Z"
 }
@@ -59,6 +60,14 @@ if ! [[ $NEW_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]
 fi
 
 BASE_VERSION="${NEW_VERSION%%-*}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source-path=SCRIPTDIR source=lib/python-version.sh
+source "$SCRIPT_DIR/lib/python-version.sh"
+
+# Derive the MCP package's PEP 440 version before touching any file, so a
+# version with no projection aborts the bump instead of half-applying it.
+NEW_PYTHON_VERSION=$(python_version "$NEW_VERSION")
 
 # Check we're in repo root
 if [ ! -f "cmd/bd/version.go" ]; then
@@ -103,8 +112,11 @@ update_file ".claude-plugin/marketplace.json" "\"version\": \"$CURRENT_VERSION\"
 
 # 3. MCP Python package
 echo "  • integrations/beads-mcp/*"
-update_file "integrations/beads-mcp/pyproject.toml" "version = \"$CURRENT_VERSION\"" "version = \"$NEW_VERSION\""
-update_file "integrations/beads-mcp/src/beads_mcp/__init__.py" "__version__ = \"$CURRENT_VERSION\"" "__version__ = \"$NEW_VERSION\""
+# These carry the PEP 440 projection (scripts/lib/python-version.sh), not the
+# semver string, so rewrite the version field wholesale instead of anchoring
+# on CURRENT_VERSION.
+update_file "integrations/beads-mcp/pyproject.toml" '^version = "[^"]*"' "version = \"$NEW_PYTHON_VERSION\""
+update_file "integrations/beads-mcp/src/beads_mcp/__init__.py" '^__version__ = "[^"]*"' "__version__ = \"$NEW_PYTHON_VERSION\""
 # The release workflow's MCP package gate runs `uv sync --locked`, so a
 # pyproject bump without a lock refresh fails the release only in the
 # tag-triggered run — after the tag exists and can no longer be rewritten.

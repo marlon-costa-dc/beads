@@ -1,0 +1,16 @@
+# Deliberate storage-path references exempted from check-doc-flags.sh
+# "Check 3: Legacy storage references".
+#
+# One extended regex per line, matched against
+# "<repo-relative path>:<line number>:<line text>". Blank lines and lines
+# starting with # are ignored. Every entry must match at least one finding, or
+# the check fails, so remove an entry together with the text it exempts.
+
+# Generated CLI reference: the --db flag help text describes auto-discovery.
+^docs/CLI_REFERENCE\.md:[0-9]+:.*--db string.*Database path
+# Dolt guide: cleanup of the .backup-*.db files a migration leaves behind.
+^docs/architecture/dolt\.md:[0-9]+:.*\.backup-.*\.db
+# Test-writing example that builds a throwaway database path under tmpDir.
+^AGENT_INSTRUCTIONS\.md:[0-9]+:.*filepath\.Join\(tmpDir, "\.beads", "beads\.db"\)
+# Upgrade guide: the sealed SQLite bridge for a workspace still on one .db file.
+^docs/getting-started/upgrading\.md:[0-9]+:.*One `\.beads/\*\.db` file.*[Ss]ealed SQLite bridge

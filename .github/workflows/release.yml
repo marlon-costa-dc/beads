@@ -22,12 +22,54 @@ env:
   BD_DISABLE_EVENT_FLUSH: "1"
 
 jobs:
+  # The repository that owns releases is configuration, not code: the
+  # RELEASE_REPOSITORY Actions variable (owner/name). An unset or malformed
+  # value fails the run here. Every other job descends from
+  # verify-version-consistency, which runs only for a v* tag in that
+  # repository, so a clone or a branch dispatch publishes nothing.
+  release-target:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.target.outputs.enabled }}
+      owner: ${{ steps.target.outputs.owner }}
+      name: ${{ steps.target.outputs.name }}
+      repository: ${{ steps.target.outputs.repository }}
+    steps:
+      - name: Resolve release repository
+        id: target
+        env:
+          RELEASE_REPOSITORY: ${{ vars.RELEASE_REPOSITORY }}
+        run: |
+          if [ -z "$RELEASE_REPOSITORY" ]; then
+            echo "::error::Actions variable RELEASE_REPOSITORY is not set; set it to the owner/name of the repository that publishes releases" >&2
+            exit 1
+          fi
+          if ! [[ $RELEASE_REPOSITORY =~ ^([A-Za-z0-9-]+)/([A-Za-z0-9._-]+)$ ]]; then
+            echo "::error::Actions variable RELEASE_REPOSITORY='$RELEASE_REPOSITORY' is not owner/name" >&2
+            exit 1
+          fi
+          {
+            echo "owner=${BASH_REMATCH[1]}"
+            echo "name=${BASH_REMATCH[2]}"
+            echo "repository=$RELEASE_REPOSITORY"
+          } >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REPOSITORY" != "$RELEASE_REPOSITORY" ]; then
+            echo "::notice::$GITHUB_REPOSITORY is not the release repository $RELEASE_REPOSITORY; nothing is published"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          elif [[ $GITHUB_REF != refs/tags/v* ]]; then
+            echo "::notice::$GITHUB_REF is not a v* tag; nothing is published"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
   # Pre-publish gate: refuse to publish a release whose version constants and
   # Docusaurus docs snapshot disagree. This blocks the failure mode where a tag
   # ships with version.go bumped but the docs snapshot missing (which otherwise
   # only surfaces as a red main after the artifacts are already published).
   verify-version-consistency:
-    if: ${{ github.repository == 'gastownhall/beads' && startsWith(github.ref, 'refs/tags/v') }}
+    needs: release-target
+    if: ${{ needs.release-target.outputs.enabled == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -50,7 +92,6 @@ jobs:
 
   release-package-mcp:
     name: Release Package Gate (MCP)
-    if: ${{ github.repository == 'gastownhall/beads' && startsWith(github.ref, 'refs/tags/v') }}
     needs: verify-version-consistency
     runs-on: ubuntu-latest
     steps:
@@ -73,17 +114,8 @@ jobs:
       - name: Run MCP package gate
         run: make ci-package-mcp
 
-      - name: Upload validated MCP dist
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: release-mcp-dist
-          path: integrations/beads-mcp/dist/*
-          if-no-files-found: error
-          retention-days: 7
-
   release-package-npm:
     name: Release Package Gate (npm)
-    if: ${{ github.repository == 'gastownhall/beads' && startsWith(github.ref, 'refs/tags/v') }}
     needs: verify-version-consistency
     runs-on: ubuntu-latest
     steps:
@@ -105,9 +137,10 @@ jobs:
 
 
   goreleaser:
-    # Guard: only run goreleaser in the canonical repository (not in forks)
-    if: ${{ github.repository == 'gastownhall/beads' && startsWith(github.ref, 'refs/tags/v') }}
+    # Runs only in the release repository, through release-target ->
+    # verify-version-consistency -> the package gates.
     needs:
+      - release-target
       - release-package-mcp
       - release-package-npm
     runs-on: ubuntu-latest
@@ -163,11 +196,14 @@ jobs:
         with:
           distribution: goreleaser
           version: '~> v2'
-          args: >
-            release --clean --parallelism 1
-            ${{ github.repository != 'gastownhall/beads' && '--skip=publish --skip=announce' || '' }}
+          args: release --clean --parallelism 1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # .goreleaser.yml publishes to, and documents installs from, this
+          # repository.
+          RELEASE_OWNER: ${{ needs.release-target.outputs.owner }}
+          RELEASE_NAME: ${{ needs.release-target.outputs.name }}
+          RELEASE_REPOSITORY: ${{ needs.release-target.outputs.repository }}
           # Windows code signing (optional - signing is skipped if not set)
           WINDOWS_SIGNING_CERT_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_CERT_PFX_BASE64 }}
           WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
@@ -216,7 +252,6 @@ jobs:
   goreleaser-macos:
     # Build macOS binaries with CGO_ENABLED=1 for embedded Dolt support.
     # Runs on native macOS to avoid zig/osxcross cross-compilation issues.
-    if: ${{ github.repository == 'gastownhall/beads' && startsWith(github.ref, 'refs/tags/v') }}
     needs: goreleaser
     runs-on: macos-latest
     steps:
@@ -329,7 +364,6 @@ jobs:
   attest-release:
     # Attest the complete release after GoReleaser assets and the native macOS
     # archives have both populated checksums.txt.
-    if: ${{ github.repository == 'gastownhall/beads' && startsWith(github.ref, 'refs/tags/v') }}
     needs: [goreleaser, goreleaser-macos]
     runs-on: ubuntu-latest
     steps:
@@ -372,65 +406,3 @@ jobs:
         with:
           subject-checksums: ${{ steps.assets.outputs.checksums }}
           sbom-path: ${{ steps.assets.outputs.sbom }}
-
-  publish-pypi:
-    runs-on: ubuntu-latest
-    needs: [release-package-mcp, goreleaser]
-    if: ${{ github.repository == 'gastownhall/beads' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.14'
-
-      - name: Install uv
-        run: python -m pip install uv==0.11.16
-
-      - name: Download validated MCP dist
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: release-mcp-dist
-          path: integrations/beads-mcp/dist
-
-      - name: Verify validated MCP dist
-        run: |
-          test -n "$(find integrations/beads-mcp/dist -maxdepth 1 -type f -print -quit)"
-          ls -la integrations/beads-mcp/dist
-
-      - name: Publish to PyPI
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          cd integrations/beads-mcp
-          uv tool run twine upload dist/*
-
-  publish-npm:
-    runs-on: ubuntu-latest
-    needs: [release-package-npm, goreleaser, goreleaser-macos]
-    if: ${{ github.repository == 'gastownhall/beads' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
-    permissions:
-      contents: read
-      id-token: write  # Required for npm provenance/trusted publishing
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
-
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
-        with:
-          node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Update npm for OIDC trusted publishing
-        run: npm install -g npm@latest  # Requires npm >= 11.5.1 for trusted publishing
-
-      - name: Publish to npm
-        run: |
-          cd npm-package
-          npm publish --access public
-          # Uses OIDC trusted publishing - no token needed
-          # Provenance attestations are automatic with trusted publishing
