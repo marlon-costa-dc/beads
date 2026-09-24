@@ -31,6 +31,7 @@ var _ storage.FullGarbageCollector = (*EmbeddedDoltStore)(nil)
 var _ storage.Flattener = (*EmbeddedDoltStore)(nil)
 var _ storage.Compactor = (*EmbeddedDoltStore)(nil)
 var _ storage.SchemaMigrator = (*EmbeddedDoltStore)(nil)
+var _ storage.SchemaInspector = (*EmbeddedDoltStore)(nil)
 var _ storage.EventsJournalConfigurer = (*EmbeddedDoltStore)(nil)
 var _ storage.ExternalRefHistoryQuerier = (*EmbeddedDoltStore)(nil)
 
@@ -305,6 +306,18 @@ func (s *EmbeddedDoltStore) ApplySchemaMigrations(ctx context.Context) (int, err
 	defer conn.Close()
 
 	return schema.MigrateUp(ctx, conn)
+}
+
+// InspectSchema reports both migration cursors without mutating the database.
+// It needs no write access, so it also serves read-only and preview opens.
+func (s *EmbeddedDoltStore) InspectSchema(ctx context.Context) (storage.SchemaInspection, error) {
+	var inspection storage.SchemaInspection
+	err := s.withDBConn(ctx, func(db versioncontrolops.DBConn) error {
+		var err error
+		inspection, err = schema.Inspect(ctx, db)
+		return err
+	})
+	return inspection, err
 }
 
 func (s *EmbeddedDoltStore) initSchema(ctx context.Context) error {

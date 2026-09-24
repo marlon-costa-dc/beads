@@ -1454,6 +1454,11 @@ func (m migrationSource) pendingVersions(ctx context.Context, db DBConn) ([]int,
 	if err != nil {
 		return nil, err
 	}
+	return m.pendingAfter(current), nil
+}
+
+// pendingAfter lists the versions of this series above current, in order.
+func (m migrationSource) pendingAfter(current int) []int {
 	files := m.list()
 	pending := make([]int, 0, len(files))
 	for _, mf := range files {
@@ -1461,7 +1466,7 @@ func (m migrationSource) pendingVersions(ctx context.Context, db DBConn) ([]int,
 			pending = append(pending, mf.version)
 		}
 	}
-	return pending, nil
+	return pending
 }
 
 func (m migrationSource) pendingMigrationDirtyTables(ctx context.Context, db DBConn, dirtyBefore map[string]dirtyTableState) ([]string, error) {

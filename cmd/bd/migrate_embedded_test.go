@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/steveyegge/beads/internal/storage/embeddeddolt"
+	"github.com/steveyegge/beads/internal/storage/schema"
 )
 
 // bdMigrate runs "bd migrate" with the given args and returns stdout.
@@ -272,6 +273,96 @@ func TestEmbeddedMigrate(t *testing.T) {
 		})
 		if persistedRepoID != expectedRepoID {
 			t.Errorf("persisted B repo_id = %q, want %q", persistedRepoID, expectedRepoID)
+		}
+	})
+
+	t.Run("migrate_inspect_reports_schema_cursors", func(t *testing.T) {
+		dir, beadsDir, _ := bdInit(t, bd, "--prefix", "ic")
+		setMigrateJSONConfigFalse(t, beadsDir)
+		inspectState := func() map[string]interface{} {
+			t.Helper()
+			out := bdMigrateJSON(t, bd, dir, "--inspect")
+			var result map[string]interface{}
+			if err := json.Unmarshal([]byte(out), &result); err != nil {
+				t.Fatalf("bd --format=json migrate --inspect returned invalid JSON: %v\n%s", err, out)
+			}
+			state, ok := result["current_state"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("migrate inspection current_state = %#v, want object", result["current_state"])
+			}
+			return state
+		}
+		versions := func(from, to int) []interface{} {
+			out := []interface{}{}
+			for v := from; v <= to; v++ {
+				out = append(out, float64(v))
+			}
+			return out
+		}
+
+		fresh := inspectState()
+		latest := schema.LatestVersion()
+		wantFresh := map[string]interface{}{
+			"schema_migration_version":                float64(latest),
+			"latest_schema_migration_version":         float64(latest),
+			"pending_schema_migrations":               []interface{}{},
+			"ignored_schema_migration_version":        float64(schema.LatestIgnoredVersion()),
+			"latest_ignored_schema_migration_version": float64(schema.LatestIgnoredVersion()),
+			"pending_ignored_schema_migrations":       []interface{}{},
+			"application_version":                     Version,
+			"schema_version":                          Version,
+			"binary_version":                          Version,
+			"dirty_tables":                            []interface{}{},
+		}
+		for key, want := range wantFresh {
+			if got := fresh[key]; !reflect.DeepEqual(got, want) {
+				t.Errorf("fresh store current_state[%q] = %#v, want %#v", key, got, want)
+			}
+		}
+
+		// Rewind the main cursor below the tail of the series: inspection must
+		// report the cursor it reads and every migration still above it.
+		const behind = 59
+		withEmbeddedMigrateSQL(t, beadsDir, "ic", func(db *sql.DB) error {
+			if _, err := db.ExecContext(t.Context(), "DELETE FROM schema_migrations WHERE version > ?", behind); err != nil {
+				return fmt.Errorf("rewind schema_migrations to %d: %w", behind, err)
+			}
+			return nil
+		})
+		rewound := inspectState()
+		if got, want := rewound["schema_migration_version"], float64(behind); got != want {
+			t.Errorf("rewound schema_migration_version = %#v, want %#v", got, want)
+		}
+		if got, want := rewound["pending_schema_migrations"], versions(behind+1, latest); !reflect.DeepEqual(got, want) {
+			t.Errorf("rewound pending_schema_migrations = %#v, want %#v", got, want)
+		}
+		if got, want := rewound["dirty_tables"], []interface{}{"schema_migrations"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("rewound dirty_tables = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("migrate_inspect_fails_when_application_version_is_unreadable", func(t *testing.T) {
+		dir, beadsDir, _ := bdInit(t, bd, "--prefix", "ie")
+		setMigrateJSONConfigFalse(t, beadsDir)
+		withEmbeddedMigrateSQL(t, beadsDir, "ie", func(db *sql.DB) error {
+			if _, err := db.ExecContext(t.Context(), "DROP TABLE local_metadata"); err != nil {
+				return fmt.Errorf("drop local_metadata: %w", err)
+			}
+			return nil
+		})
+		cmd := exec.Command(bd, "--format=json", "migrate", "--inspect")
+		cmd.Dir = dir
+		cmd.Env = bdEnv(dir)
+		stdout, stderr, err := runCommandBuffers(t, cmd)
+		if err == nil {
+			t.Fatalf("bd migrate --inspect succeeded with an unreadable bd_version; want failure\nstdout:\n%s", stdout.String())
+		}
+		combined := stdout.String() + stderr.String()
+		if !strings.Contains(combined, "read application version") || !strings.Contains(combined, "local_metadata") {
+			t.Errorf("bd migrate --inspect error = %q, want the application-version read failure naming local_metadata", combined)
+		}
+		if strings.Contains(stdout.String(), "unknown") {
+			t.Errorf("bd migrate --inspect normalized the failure into output: %s", stdout.String())
 		}
 	})
 

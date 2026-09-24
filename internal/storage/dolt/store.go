@@ -305,6 +305,7 @@ var _ storage.FullGarbageCollector = (*DoltStore)(nil)
 var _ storage.Flattener = (*DoltStore)(nil)
 var _ storage.Compactor = (*DoltStore)(nil)
 var _ storage.SchemaMigrator = (*DoltStore)(nil)
+var _ storage.SchemaInspector = (*DoltStore)(nil)
 var _ storage.ExternalRefHistoryQuerier = (*DoltStore)(nil)
 var _ storage.EventsJournalConfigurer = (*DoltStore)(nil)
 
@@ -2952,6 +2953,12 @@ func (s *DoltStore) ApplySchemaMigrations(ctx context.Context) (int, error) {
 	}
 	defer migDB.Close()
 	return initSchemaOnDBWithRetry(ctx, migDB)
+}
+
+// InspectSchema reports both migration cursors without mutating the database.
+// Implements storage.SchemaInspector.
+func (s *DoltStore) InspectSchema(ctx context.Context) (storage.SchemaInspection, error) {
+	return schema.Inspect(ctx, s.db)
 }
 
 // openMigrationDB opens a one-off connection pool for schema migrations with no
