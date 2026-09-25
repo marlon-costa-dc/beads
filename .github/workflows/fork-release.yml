@@ -56,6 +56,18 @@ jobs:
           # GoReleaser only builds here; the next step publishes to this fork.
           args: release --clean --parallelism 1 --skip=publish --skip=announce
 
+      - name: Package the contract corpus
+        # Mirrors upstream release.yml: downstream consumers (gascity's
+        # sync-bd-corpus.sh) anchor their vendored corpus to this asset. It is
+        # added to dist/ before publication so checksums.txt and the
+        # attestation below cover it.
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          archive="dist/beads_${version}_contract_corpus.tar.gz"
+          tar -czf "$archive" -C cmd/bd/protocol/testdata corpus
+          (cd dist && sha256sum "$(basename "$archive")") >> dist/checksums.txt
+
       - name: Publish the fork prerelease
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -68,9 +80,121 @@ jobs:
             --verify-tag \
             --prerelease \
             --title "$GITHUB_REF_NAME" \
-            --notes "Fork build of upstream ${GITHUB_REF_NAME%-fd.*}. The product tree equals the upstream tag; see FORK.md for the fork plumbing."
+            --notes "Fork build of upstream's default branch (${GITHUB_REF_NAME%-fd.*} line); the tag annotation names the synced upstream commit. See FORK.md for the fork delta."
 
       - name: Attest release artifacts
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-checksums: dist/checksums.txt
+
+  release-macos:
+    # Mirrors upstream release.yml's goreleaser-macos job: darwin binaries need
+    # CGO on a native macOS runner (.goreleaser.yml leaves darwin to this job),
+    # and downstream macOS CI installs them from this fork's release.
+    if: ${{ github.event.repository.fork }}
+    needs: release
+    runs-on: macos-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build darwin/arm64
+        env:
+          CGO_ENABLED: "1"
+          GOARCH: arm64
+          GOOS: darwin
+        run: |
+          go build -tags "gms_pure_go netgo" \
+            -ldflags "-s -w -X main.Version=${{ steps.version.outputs.version }} -X main.Build=$(git rev-parse --short HEAD) -X main.Commit=$(git rev-parse HEAD) -X main.Branch=$(git branch --show-current)" \
+            -o bd-darwin-arm64 ./cmd/bd
+          ./scripts/verify-cgo.sh bd-darwin-arm64
+          if otool -L bd-darwin-arm64 | grep -qi icu; then
+            echo "ERROR: bd-darwin-arm64 has unexpected ICU runtime dependency" >&2
+            otool -L bd-darwin-arm64 >&2
+            exit 1
+          fi
+          codesign -s - -f bd-darwin-arm64
+
+      - name: Build darwin/amd64
+        env:
+          CGO_ENABLED: "1"
+          GOARCH: amd64
+          GOOS: darwin
+          CC: clang -arch x86_64
+          CXX: clang++ -arch x86_64
+        run: |
+          go build -tags "gms_pure_go netgo" \
+            -ldflags "-s -w -X main.Version=${{ steps.version.outputs.version }} -X main.Build=$(git rev-parse --short HEAD) -X main.Commit=$(git rev-parse HEAD) -X main.Branch=$(git branch --show-current)" \
+            -o bd-darwin-amd64 ./cmd/bd
+          ./scripts/verify-cgo.sh bd-darwin-amd64
+          if otool -L bd-darwin-amd64 | grep -qi icu; then
+            echo "ERROR: bd-darwin-amd64 has unexpected ICU runtime dependency" >&2
+            otool -L bd-darwin-amd64 >&2
+            exit 1
+          fi
+          codesign -s - -f bd-darwin-amd64
+
+      - name: Smoke test embedded dolt (arm64 native)
+        run: |
+          bd="$(pwd)/bd-darwin-arm64"
+          tmpdir=$(mktemp -d)
+          projdir="$tmpdir/smoketest"
+          mkdir -p "$projdir"
+          cd "$projdir"
+          git init -b main
+          git config user.name "CI" && git config user.email "ci@test"
+          git commit --allow-empty -m "init"
+          "$bd" init --prefix smoketest
+          "$bd" create "smoke test" --type task
+          "$bd" list | grep -q "smoke test"
+          if pgrep -f "dolt sql-server" >/dev/null 2>&1; then
+            echo "ERROR: unexpected dolt sql-server process running" >&2
+            exit 1
+          fi
+          cd - >/dev/null
+          rm -rf "$tmpdir"
+
+      - name: Package archives
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          for arch in arm64 amd64; do
+            staging="beads_${version}_darwin_${arch}"
+            mkdir -p "$staging"
+            cp "bd-darwin-${arch}" "$staging/bd"
+            cp LICENSE README.md CHANGELOG.md "$staging/"
+            tar -czf "${staging}.tar.gz" -C "$staging" .
+            shasum -a 256 "${staging}.tar.gz" >> darwin-checksums.txt
+          done
+
+      - name: Upload to the fork release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          for arch in arm64 amd64; do
+            gh release upload "v${version}" "beads_${version}_darwin_${arch}.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"
+          done
+          gh release download "v${version}" --pattern checksums.txt --dir "$RUNNER_TEMP/checksums" --repo "$GITHUB_REPOSITORY"
+          cat darwin-checksums.txt >> "$RUNNER_TEMP/checksums/checksums.txt"
+          gh release upload "v${version}" "$RUNNER_TEMP/checksums/checksums.txt" --clobber --repo "$GITHUB_REPOSITORY"
+
+      - name: Attest darwin artifacts
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: beads_*_darwin_*.tar.gz
