@@ -21,10 +21,16 @@ records the upstream commit the release is built on.
 - **Upstream's own mechanisms come first.** Before patching, look for an
   existing configuration key, environment variable, extension point or
   upstream commit.
-- **Migrations are upstream's.** The fork ships none of its own. Stores that
-  recorded upstream main's earlier `ignored/0026_add_wisps_current_revision`
-  converge through upstream's own renumbering to `ignored/0027`, whose guard
-  makes the re-run a no-op.
+- **Shipped ignored migrations stay frozen.** This fork's stores recorded
+  `ignored/0026_add_wisps_current_revision` (upstream main's earlier numbering,
+  byte-identical to `2bb1e20de`), so the fork keeps it and numbers upstream's
+  `0026_dep_rekey_dedup_marker` as ignored `0027`. Upstream later swapped the
+  two (`0026` dep re-key, `0027` wisps); the fork keeps its own frozen pair
+  (`scripts/check-migration-hygiene.sh` Check C), which ends at the same `0027`,
+  so upstream's next ignored migration applies unchanged. The dep re-key runs
+  on any open with pending migration work (`schema.go`), so the fork's pending
+  `0027` marker triggers the same pass. Never rename a migration a store may
+  have recorded.
 
 ## Sync with upstream
 
