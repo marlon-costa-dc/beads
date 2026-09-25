@@ -382,6 +382,15 @@ type Config struct {
 	// open of a clean database converges normally.
 	LenientOpen bool
 
+	// RemoteSyncOpen is LenientOpen's narrow sibling for the #6575
+	// data-behind gate refusal: it tolerates ONLY that refusal (and only that
+	// refusal — not the dirty-table guard, not any other gate reason), because
+	// the refusal's documented remedy is `bd dolt pull`, which opens the store
+	// and so hit the refusal that prescribed it. Set for the remote-sync
+	// commands that can clear the refused precondition. Honored in embedded
+	// (openRemoteSync) and server mode alike.
+	RemoteSyncOpen bool
+
 	// Server connection options
 	ServerSocket   string // Unix domain socket path (overrides Host/Port when set)
 	ServerHost     string // Server host (default: 127.0.0.1)
@@ -489,6 +498,15 @@ type Config struct {
 	// execWithLongTimeout/openLongTimeoutConn instead.
 	PoolReadTimeout  time.Duration
 	PoolWriteTimeout time.Duration
+
+	// PoolReadTimeoutFallback replaces the built-in 10s pool read deadline
+	// ONLY when nothing else set PoolReadTimeout — not the caller, not
+	// BEADS_DOLT_POOL_READ_TIMEOUT, not dolt.pool-read-timeout. It lets a
+	// command whose ordinary statements are known to run long (bd import's
+	// chunk commits, which a server-side auto_gc pause stretches past 10s —
+	// wy-sbgucn) raise its own default without overriding an operator's
+	// explicit choice. 0 = keep the built-in default.
+	PoolReadTimeoutFallback time.Duration
 }
 
 // Defaults for the *sql.DB connection pool. Exported for tests/callers that
@@ -2041,7 +2059,9 @@ func newServerMode(ctx context.Context, cfg *Config) (*DoltStore, error) {
 	if !cfg.ReadOnly && !cfg.Gateway {
 		applied, err := store.initSchema(ctx, dbFacts.bootstrapHeal)
 		if err != nil {
-			if !cfg.LenientOpen || !warnLenientOpenRefusal(err) {
+			tolerated := (cfg.LenientOpen && warnLenientOpenRefusal(err)) ||
+				(cfg.RemoteSyncOpen && warnRemoteSyncOpenRefusal(err))
+			if !tolerated {
 				return nil, fmt.Errorf("failed to initialize schema: %w", err)
 			}
 			// A tolerated refusal still reports what the aborted pass
@@ -2112,6 +2132,35 @@ func warnLenientOpenRefusal(err error) bool {
 			"Warning: %s"+
 				"  Working-set reconcile command: continuing on schema v%d without\n"+
 				"  migrating; the commit applies to the working set at the current schema.\n",
+			gateErr.UserMessage(), gateErr.CurrentVersion)
+		return true
+	}
+	return false
+}
+
+// warnRemoteSyncOpenRefusal reports whether a remote-sync open
+// (Config.RemoteSyncOpen) may continue past err instead of failing, warning on
+// stderr when it may.
+//
+// It is warnLenientOpenRefusal's narrow sibling and tolerates exactly one
+// refusal: the #6575 data-behind remote-migrate gate stop, whose documented
+// remedy is `bd dolt pull` — a command that opens the store and therefore hit
+// the very refusal that prescribed it. That is the #4566 deadlock shape, and
+// #4566's own fix (a lenient open for `bd dolt commit`) is the precedent.
+//
+// Everything else — every other gate reason, the dirty-table guard, and any
+// other migration failure — still fails the open here, exactly as on a strict
+// open. A pull cannot resolve a fork skew, a below-floor database or a
+// shared-store consent decision, so letting it through those refusals would
+// buy nothing and hide them.
+func warnRemoteSyncOpenRefusal(err error) bool {
+	var gateErr *schema.RemoteMigrateGateError
+	if errors.As(err, &gateErr) && gateErr.IsDataBehind() {
+		fmt.Fprintf(os.Stderr,
+			"Warning: %s"+
+				"  Remote-sync command: continuing on schema v%d without migrating, so this\n"+
+				"  pull can bring in the commits this clone is behind on. Re-run the command\n"+
+				"  you were blocked on once it completes.\n",
 			gateErr.UserMessage(), gateErr.CurrentVersion)
 		return true
 	}
@@ -2267,6 +2316,9 @@ func buildServerDSN(cfg *Config, database string) string {
 		return base.String()
 	}
 	parsed.ReadTimeout = defaultPoolReadTimeout
+	if cfg.PoolReadTimeoutFallback > 0 {
+		parsed.ReadTimeout = cfg.PoolReadTimeoutFallback
+	}
 	if cfg.PoolReadTimeout > 0 {
 		parsed.ReadTimeout = cfg.PoolReadTimeout
 	}
@@ -2516,15 +2568,6 @@ func openServerConnection(ctx context.Context, cfg *Config) (*sql.DB, string, se
 		return db, connStr, serverConnFacts{}, nil
 	}
 
-	// Ensure database exists (may need to create it)
-	// First connect without database to create it
-	initConnStr := buildServerDSN(cfg, "")
-	initDB, err := sql.Open("mysql", initConnStr)
-	if err != nil {
-		return nil, "", serverConnFacts{}, fmt.Errorf("failed to open init connection: %w", err)
-	}
-	defer func() { _ = initDB.Close() }()
-
 	// Validate database name to prevent SQL injection via backtick escaping
 	if err := ValidateDatabaseName(cfg.Database); err != nil {
 		return nil, "", serverConnFacts{}, fmt.Errorf("invalid database name %q: %w", cfg.Database, err)
@@ -2541,6 +2584,46 @@ func openServerConnection(ctx context.Context, cfg *Config) (*sql.DB, string, se
 				"this is a test database name on the production server (see DOLT-WAR-ROOM.md)",
 			cfg.Database, cfg.ServerPort)
 	}
+
+	// Fast path (wy-s8ytnw), keyed the same way as Gateway above rather than
+	// by deleting the probe: connect straight to the target database. A
+	// successful connect IS the existence proof, so the steady-state open —
+	// a database that already exists, which is every open but the very
+	// first — skips the no-database init connection (one full MySQL
+	// session per bd invocation on a shared server) and its SHOW DATABASES.
+	// The facts are exact, not merely unproven as for Gateway: existence is
+	// established, and `created` is honestly false — this call created
+	// nothing, so fresh-bootstrap heal stays unarmed and the CreateIfMissing
+	// identity gate (GH#4637) sees alreadyExisted exactly as the SHOW
+	// DATABASES probe would have reported it.
+	//
+	// Any failure — Unknown database (1049) because it does not exist yet,
+	// server down, bad credentials — falls through to the historical
+	// probe-then-create path, which owns creation, the #5042 ownership
+	// signal, databaseNotFoundError, and every error message callers match.
+	pingErr := db.PingContext(ctx)
+	if pingErr == nil {
+		connReady = true
+		return db, connStr, serverConnFacts{alreadyExisted: true}, nil
+	}
+
+	// Advisory only: the probe-then-create path below is the historical open,
+	// so a failure here is never fatal. But a silently discarded error is a
+	// fast path that has quietly stopped firing — here that means every open
+	// is back to burning the extra MySQL session this path exists to remove,
+	// with nothing to say so. Same reasoning as the convergence probe in
+	// internal/storage/schema/lock.go.
+	debug.Logf("dolt: direct-connect fast path unavailable for %q on %s:%d, using the no-database init connection: %v\n",
+		cfg.Database, cfg.ServerHost, cfg.ServerPort, pingErr)
+
+	// Ensure database exists (may need to create it)
+	// First connect without database to create it
+	initConnStr := buildServerDSN(cfg, "")
+	initDB, err := sql.Open("mysql", initConnStr)
+	if err != nil {
+		return nil, "", serverConnFacts{}, fmt.Errorf("failed to open init connection: %w", err)
+	}
+	defer func() { _ = initDB.Close() }()
 
 	// Check if the database already exists before deciding whether to create it.
 	// This prevents the shadow database bug: without CreateIfMissing, connecting
@@ -2912,6 +2995,13 @@ func (s *DoltStore) initSchema(ctx context.Context, bootstrapHeal *schema.FreshB
 	adopt := &schema.FastForwardAdopter{
 		IsStrictAncestor: func(ctx context.Context, db schema.DBConn, ref string) (bool, error) {
 			return versioncontrolops.LocalIsStrictAncestorOf(ctx, db, ref)
+		},
+		// The raw counts the equal-version data-behind check needs
+		// (gastownhall/beads#6575): behind >= 1 whatever ahead is, plus
+		// which shape it is so the refusal names the pull the operator
+		// will actually get.
+		AheadBehind: func(ctx context.Context, db schema.DBConn, ref string) (int, int, error) {
+			return versioncontrolops.LocalAheadBehind(ctx, db, ref)
 		},
 		WorkingSetClean: func(ctx context.Context, db schema.DBConn) (bool, error) {
 			return versioncontrolops.WorkingSetClean(ctx, db)
@@ -4792,12 +4882,12 @@ func (s *DoltStore) RecomputeAllBlocked(ctx context.Context) (int, error) {
 }
 
 func (s *DoltStore) recomputeAllBlocked(ctx context.Context) (int, error) {
-	// The full pass's batched UPDATEs carry five correlated EXISTS subqueries
-	// each; on a loaded shared server a single batch can outlive the pool's
-	// per-I/O deadline (default 10s, see buildServerDSN), killing the repair
-	// with "i/o timeout" — and the retry dies the same way, so the owed
-	// recompute never lands (bd-bn8jo). Run it on a dedicated long-timeout
-	// connection like the other known-long maintenance ops.
+	// The full pass runs unbatched whole-table semi-join UPDATEs, looped until
+	// the fixpoint converges; on a loaded shared server a single one can
+	// outlive the pool's per-I/O deadline (default 10s, see buildServerDSN),
+	// killing the repair with "i/o timeout" — and the retry dies the same way,
+	// so the owed recompute never lands (bd-bn8jo). Run it on a dedicated
+	// long-timeout connection like the other known-long maintenance ops.
 	db, err := s.openLongTimeoutConn()
 	if err != nil {
 		return 0, err

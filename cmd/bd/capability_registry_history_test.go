@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -31,7 +33,7 @@ func TestSyncRefusesBeforeProvider(t *testing.T) {
 	root := &cobra.Command{Use: "bd"}
 	cmd := &cobra.Command{Use: "sync"}
 	root.AddCommand(cmd)
-	err := validateProxyMaintenanceBeforeProvider(cmd)
+	err := validateProxyRegistryBeforeProvider(cmd, ProxyTopologyManagedLocal)
 	if err == nil {
 		t.Fatalf("sync refusal = %#v", err)
 	}
@@ -59,7 +61,10 @@ func TestHistoryDirectOnlyRefusalContract(t *testing.T) {
 	oldProvider := uowProvider
 	oldJSON := jsonOutput
 	t.Cleanup(func() { uowProvider = oldProvider; jsonOutput = oldJSON })
-	for _, path := range []string{"branch", "conflicts", "repo", "federation", "vc", "flatten", "dolt push", "dolt pull", "dolt commit", "dolt remote add", "sync"} {
+	// Driven off the expectation table itself: a second hand-written path list
+	// let "dolt remote list" and "dolt remote reset-data" sit in `expected`
+	// while nothing asserted them, which reads as coverage that is not there.
+	for _, path := range slices.Sorted(maps.Keys(expected)) {
 		parts := strings.Split(path, " ")
 		root := &cobra.Command{Use: "bd"}
 		cmd := &cobra.Command{Use: parts[0]}
@@ -71,7 +76,7 @@ func TestHistoryDirectOnlyRefusalContract(t *testing.T) {
 		}
 		uowProvider = nil
 		jsonOutput = true
-		out := captureStdout(t, func() error { _ = validateProxyMaintenanceBeforeProvider(cmd); return nil })
+		out := captureStdout(t, func() error { _ = validateProxyRegistryBeforeProvider(cmd, ProxyTopologyManagedLocal); return nil })
 		var got map[string]any
 		want := expected[path]
 		if err := json.Unmarshal([]byte(out), &got); err != nil || got["code"] != want.code || got["error"] != want.message || got["mutates"] != false {
@@ -104,7 +109,7 @@ func TestHistoryNestedFrontDoorsRefuseAndSupportedPathsPass(t *testing.T) {
 			cmd.AddCommand(child)
 			cmd = child
 		}
-		err := validateProxyMaintenanceBeforeProvider(cmd)
+		err := validateProxyRegistryBeforeProvider(cmd, ProxyTopologyManagedLocal)
 		if path == "dolt remote remove" {
 			if err != nil {
 				t.Fatalf("supported %s refused: %v", path, err)
@@ -118,9 +123,9 @@ func TestHistoryNestedFrontDoorsRefuseAndSupportedPathsPass(t *testing.T) {
 			t.Fatalf("%s exit=%v, want 1", path, err)
 		}
 		var got map[string]any
-		// validateProxyMaintenanceBeforeProvider renders the typed refusal to
+		// validateProxyRegistryBeforeProvider renders the typed refusal to
 		// stdout in JSON mode; the command must retain its nested path.
-		out := captureStdout(t, func() error { _ = validateProxyMaintenanceBeforeProvider(cmd); return nil })
+		out := captureStdout(t, func() error { _ = validateProxyRegistryBeforeProvider(cmd, ProxyTopologyManagedLocal); return nil })
 		if err := json.Unmarshal([]byte(out), &got); err != nil {
 			t.Fatalf("%s refusal JSON: %v (%q)", path, err, out)
 		}
@@ -132,7 +137,7 @@ func TestHistoryNestedFrontDoorsRefuseAndSupportedPathsPass(t *testing.T) {
 	root := &cobra.Command{Use: "bd"}
 	history := &cobra.Command{Use: "history"}
 	root.AddCommand(history)
-	if err := validateProxyMaintenanceBeforeProvider(history); err != nil {
+	if err := validateProxyRegistryBeforeProvider(history, ProxyTopologyManagedLocal); err != nil {
 		t.Fatalf("history --events supported path refused: %v", err)
 	}
 }

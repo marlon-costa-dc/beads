@@ -229,13 +229,6 @@ func effectiveRootStorePolicy(cmdName string, strictReadonly bool) rootStorePoli
 	}
 }
 
-// backendSupportsStrictReadonly reports whether the live backend path can open
-// without provisioning or lifecycle changes. Unsupported SQL backends are
-// rejected earlier by validateConfiguredBackend; proxied Dolt remains writable-only.
-func backendSupportsStrictReadonly(cfg *configfile.Config) bool {
-	return cfg == nil || !cfg.IsDoltProxiedServerMode()
-}
-
 // runsPostCommandMaintenance reports whether PersistentPostRunE should run the
 // post-command maintenance net — Dolt auto-commit, the tip-metadata commit,
 // auto-backup, auto-export and auto-push.
@@ -324,6 +317,30 @@ func isWorkingSetReconcileCommand(cmd *cobra.Command) bool {
 	return parent.Name() == "dolt" || parent.Name() == "vc"
 }
 
+// isRemoteSyncCommand reports whether cmd is `bd dolt pull`: the one command
+// the #6575 data-behind migrate-gate refusal tells the operator to run.
+//
+// It is the same deadlock isWorkingSetReconcileCommand breaks for #4566, one
+// refusal over. The gate stops a data-behind clone from migrating and names
+// `bd dolt pull` as the remedy — but the pull opens the store too, so it hit
+// that refusal before it could clear its cause. On an embedded clone there is
+// no external `dolt` binary to fall back to, which left the refused clone with
+// exactly one exit: BD_ALLOW_REMOTE_MIGRATE=1, i.e. performing the migration
+// the refusal exists to prevent. Opening via embeddeddolt.OpenForRemoteSync /
+// dolt.Config.RemoteSyncOpen tolerates that ONE gate reason and nothing else.
+//
+// Deliberately just the pull, not `bd sync`: sync also pushes and can write
+// issue rows, and a write against a stale schema is the hazard the gate is
+// about. The pull only moves the commit graph, which is precisely the
+// precondition the refusal is waiting on.
+func isRemoteSyncCommand(cmd *cobra.Command) bool {
+	if cmd.Name() != "pull" {
+		return false
+	}
+	parent := cmd.Parent()
+	return parent != nil && parent.Name() == "dolt"
+}
+
 // isForcedMigrate reports whether cmd is `bd migrate` or `bd migrate schema`
 // invoked with --force: the operator confirming they are the single designated
 // migrator, so the remote-migrate gate (#4259) must not block this run's store
@@ -343,15 +360,27 @@ func isForcedMigrate(cmd *cobra.Command) bool {
 // open targets `beads_global`, so the block's `bd migrate schema` would
 // migrate the PROJECT database and leave the refusal in place — the working
 // remedy is the same verb with the same flag.
-func printGlobalDatabaseConsentHint(w io.Writer) {
+//
+// It takes the refusal because "the same verb" is not the same verb on every
+// arm: the #6575 data-behind stop on a shared store is remote-backed by
+// construction, and there the bare verb's consent is never read (see
+// schema.SharedConsentCommandForced), so retargeting the bare form would hand
+// the operator a global-scoped command that still cannot succeed. This mirrors
+// the retarget in handleRemoteMigrateGateJSON. A nil error keeps the
+// pre-existing bare-verb wording.
+func printGlobalDatabaseConsentHint(w io.Writer, e *schema.RemoteMigrateGateError) {
 	if !globalFlag {
 		return
+	}
+	consent := schema.SharedConsentCommandGlobal
+	if e != nil && e.IsDataBehind() && e.Shared {
+		consent = schema.SharedConsentCommandForcedGlobal
 	}
 	fmt.Fprintf(w,
 		"\n  This command targeted the global database (--global), so run the\n"+
 			"  migrate step with the same flag:\n"+
 			"        %s\n",
-		schema.SharedConsentCommandGlobal)
+		consent)
 }
 
 // renderTypedOpenError prints the actionable block for the store-open failures
@@ -381,7 +410,7 @@ func renderTypedOpenError(err error) bool {
 			handleRemoteMigrateGateJSON(gateErr)
 		} else {
 			fmt.Fprint(os.Stderr, gateErr.UserMessage())
-			printGlobalDatabaseConsentHint(os.Stderr)
+			printGlobalDatabaseConsentHint(os.Stderr, gateErr)
 		}
 		return true
 	}
@@ -706,6 +735,17 @@ func prepareSelectedNoDBContext(beadsDir string) {
 	prepareSelectedCommandContext(beadsDir, true)
 }
 
+func commandJSONFlagChanged(cmd *cobra.Command) bool {
+	if cmd == nil {
+		return false
+	}
+	if cmd.Flags().Changed("json") {
+		return true
+	}
+	root := cmd.Root()
+	return root != nil && root.PersistentFlags().Changed("json")
+}
+
 // refreshBoundCommandConfig reapplies config-backed defaults after the command
 // context has been rebound to a resolved target beads directory. This keeps
 // explicit flags authoritative while letting rerouted/explicit-db commands use
@@ -718,7 +758,7 @@ func refreshBoundCommandConfig(cmd *cobra.Command) {
 	if root == nil {
 		root = cmd
 	}
-	if !root.PersistentFlags().Changed("json") && !root.PersistentFlags().Changed("format") {
+	if !commandJSONFlagChanged(cmd) && !root.PersistentFlags().Changed("format") {
 		jsonOutput = config.GetBool("json")
 	}
 	if !root.PersistentFlags().Changed("readonly") {
@@ -1061,7 +1101,7 @@ var rootCmd = &cobra.Command{
 			}
 		}
 		// If flag wasn't explicitly set, use viper value
-		if !cmd.Root().PersistentFlags().Changed("json") && !cmd.Root().PersistentFlags().Changed("format") {
+		if !commandJSONFlagChanged(cmd) && !cmd.Root().PersistentFlags().Changed("format") {
 			jsonOutput = config.GetBool("json")
 		} else {
 			flagOverrides["json"] = struct {
@@ -1256,17 +1296,17 @@ var rootCmd = &cobra.Command{
 					fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 				}
 			}
-			if cmdName == "doctor" && usesProxiedServer() {
-				// Refuse only on a real refusal. validateProxyMaintenance...
+			if beadsDir == "" {
+				beadsDir = beads.FindBeadsDir()
+			}
+			if commandRegistryPath(cmd) == "doctor" && usesProxiedServer() {
+				// Refuse only on a real refusal. The registry validator
 				// returns nil for doctor subcommands, and returning early on
 				// that would skip the legacy-store guard and autocommit-mode
 				// resolution every other skipsStoreInit command still runs.
-				if err := validateProxyMaintenanceBeforeProvider(cmd); err != nil {
+				if err := validateProxyRegistryBeforeProvider(cmd, resolveProxiedTopology(beadsDir)); err != nil {
 					return err
 				}
-			}
-			if beadsDir == "" {
-				beadsDir = beads.FindBeadsDir()
 			}
 			if err := guardLegacyNoStoreCommand(cmd, beadsDir); err != nil {
 				isMigrationCommand := false
@@ -1468,14 +1508,13 @@ var rootCmd = &cobra.Command{
 		}
 		// Reject proxy capability combinations before any workspace side effect
 		// (version tracking, migration, auto-start, or provider construction).
+		// Two validators, one for each half of the policy: flag-keyed rules and
+		// the path-keyed capability registry.
 		if cfg != nil && cfg.IsDoltProxiedServerMode() {
 			if err := validateProxyCapabilitiesBeforeProvider(cmd); err != nil {
 				return err
 			}
-			if err := validateProxyMaintenanceBeforeProvider(cmd); err != nil {
-				return err
-			}
-			if err := validateProxyTransformBeforeProvider(cmd); err != nil {
+			if err := validateProxyRegistryBeforeProvider(cmd, resolveProxiedTopology(beadsDir)); err != nil {
 				return err
 			}
 		}
@@ -1485,9 +1524,6 @@ var rootCmd = &cobra.Command{
 		// front-door refusals.
 		if readonlyMode && cfg != nil && cfg.IsDoltProxiedServerMode() {
 			return HandleProxyCapabilityError(AssertProxyCapability(ProxyModeProxied, ProxyCapReadonly))
-		}
-		if readonlyMode && !backendSupportsStrictReadonly(cfg) {
-			return HandleError("strict readonly is unavailable for dolt proxied-server backend; refusing to open a store that cannot guarantee mutation-free access")
 		}
 
 		// Set actor for audit trail
@@ -1622,6 +1658,10 @@ var rootCmd = &cobra.Command{
 			DisableAutoStart: policy.disableAutoStart,
 			BeadsDir:         beadsDir,
 			LenientOpen:      isWorkingSetReconcileCommand(cmd),
+			RemoteSyncOpen:   isRemoteSyncCommand(cmd),
+			// Bulk loads outlive the pool's 10s fast-fail on every server
+			// pause (wy-sbgucn); explicit env/config settings still win.
+			PoolReadTimeoutFallback: bulkLoadPoolReadTimeout(cmd),
 		}
 
 		// Load config to get database name and server connection settings.
@@ -1779,7 +1819,7 @@ var rootCmd = &cobra.Command{
 				hookRunner = hooks.NewRunner(filepath.Join(beadsDir, "hooks"))
 				uowSinks.Hook = hookRunner
 			}
-			uowProvider = uow.NewNotifyingProvider(p, uowSinks)
+			uowProvider = wireExternalDependencyUOWProvider(uow.NewNotifyingProvider(p, uowSinks))
 
 			if !previewMode {
 				reconcileVersionProxiedServer(rootCtx)
