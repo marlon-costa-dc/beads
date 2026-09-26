@@ -1148,6 +1148,46 @@ func ServerSpawnEnv() []string {
 // Debug mode also raises --loglevel from the default warning to debug;
 // the connection-log spam concern that motivated the warning floor is
 // the price of opting into debug.
+// logTail returns the last ~2KiB of the server log for error attribution.
+func logTail(path string) string {
+	data, err := os.ReadFile(path) //nolint:gosec // G304: logPath derives from user-configured beadsDir
+	if err != nil {
+		return ""
+	}
+	const max = 2048
+	if len(data) > max {
+		data = data[len(data)-max:]
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// configRejected reports whether a server-log tail names the generated YAML
+// config as the startup failure (a strict decode of a key the binary does
+// not know) — the binary's own verdict, stronger than a version floor.
+func configRejected(tail string) bool {
+	lower := strings.ToLower(tail)
+	for _, sig := range []string{
+		"unknown field",
+		"unmarshal",
+		"yaml:",
+		"decoding config",
+		"invalid config",
+	} {
+		if strings.Contains(lower, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+// logTailSuffix renders a captured dolt stderr tail for error attribution.
+func logTailSuffix(tail string) string {
+	if tail == "" {
+		return ""
+	}
+	return "\ndolt said: " + tail
+}
+
 func buildDoltServerArgs(host string, port int, debug bool, profDir string) []string {
 	var args []string
 	if debug {
@@ -1466,11 +1506,12 @@ func Start(beadsDir string) (*State, error) {
 		pid = 0
 		lastErr = nil
 		attempts = 1
+		configDegraded := false
 		if !explicitPort {
 			attempts = maxEphemeralPortAttempts
 		}
 
-		for i := range attempts {
+		for i := 0; i < attempts; i++ {
 			if !explicitPort {
 				p, allocErr := allocateEphemeralPort(cfg.Host)
 				if allocErr != nil {
@@ -1543,7 +1584,23 @@ func Start(beadsDir string) (*State, error) {
 			// Give it a moment to fail on port bind before proceeding.
 			time.Sleep(200 * time.Millisecond)
 			if !isProcessAlive(pid) {
-				lastErr = fmt.Errorf("dolt sql-server exited immediately on port %d (attempt %d/%d)", actualPort, i+1, attempts)
+				tail := logTail(logPath(beadsDir))
+				// A strict-decode failure of the generated YAML config is the
+				// binary's own verdict on a key it does not know — stronger
+				// evidence than any version floor. Degrade once to the CLI
+				// flags the config was rendered from and say so loudly.
+				if useArchiveLevelConfig && !configDegraded && configRejected(tail) {
+					useArchiveLevelConfig = false
+					configDegraded = true
+					fmt.Fprintf(os.Stderr,
+						"Warning: dolt at %s rejected the generated sql-server config; "+
+							"relaunching with CLI flags. dolt said: %s\n", doltBin, tail)
+					attempts = i + 2 // the degrade spends one retry on the CLI launch
+					pid = 0
+					continue
+				}
+				lastErr = fmt.Errorf("dolt sql-server exited immediately on port %d (attempt %d/%d)%s",
+					actualPort, i+1, attempts, logTailSuffix(tail))
 				pid = 0
 				if !explicitPort {
 					continue
