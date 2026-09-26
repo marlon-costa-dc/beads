@@ -2707,6 +2707,11 @@ esac
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// This test owns its server cleanup (it kills the started process
+	// itself), so the package TestMain's parent-death signal must stay off:
+	// with Pdeathsig the relaunched CLI child is reaped the moment the
+	// spawning thread retires, which is exactly the race under test.
+	t.Setenv("BEADS_TEST_PDEATHSIG", "")
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	beadsDir := t.TempDir()
