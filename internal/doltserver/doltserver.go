@@ -1992,7 +1992,12 @@ func KillStaleServers(beadsDir string) ([]int, error) {
 // A dial that succeeds but never greets (TCP listener accepting, MySQL
 // engine not yet writing) is not treated as ready: this function keeps
 // polling until either a greeting arrives or the deadline is reached.
-func waitForReady(host string, port int, timeout time.Duration) error {
+// waitForReady is a package seam: tests that exercise the launch/relaunch
+// contract override it (their fake children bind but do not speak the SQL
+// greeting); production always uses defaultWaitForReady.
+var waitForReady = defaultWaitForReady
+
+func defaultWaitForReady(host string, port int, timeout time.Duration) error {
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	deadline := time.Now().Add(timeout)
 

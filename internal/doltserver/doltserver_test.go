@@ -2713,6 +2713,13 @@ esac
 	// spawning thread retires, which is exactly the race under test.
 	t.Setenv("BEADS_TEST_PDEATHSIG", "")
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// The fake binds its port but does not speak the SQL greeting; the
+	// contract under test is the relaunch, so readiness is the plain dial.
+	origWait := waitForReady
+	waitForReady = func(host string, port int, timeout time.Duration) error {
+		return nil
+	}
+	t.Cleanup(func() { waitForReady = origWait })
 
 	beadsDir := t.TempDir()
 	state, err := Start(beadsDir)
