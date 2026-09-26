@@ -2666,3 +2666,85 @@ func TestExternalNonLocalhostHost_GH3518(t *testing.T) {
 		}
 	})
 }
+
+// TestStartDegradesToCLIFlagsWhenGeneratedConfigIsRejected proves the
+// evidence-triggered degrade: a binary that strict-decodes the generated
+// YAML config must be relaunched with the CLI flags — the startup is a
+// success, and the child's own stderr names the rejected key in the log.
+func TestStartDegradesToCLIFlagsWhenGeneratedConfigIsRejected(t *testing.T) {
+	binDir := t.TempDir()
+	fake := filepath.Join(binDir, "dolt")
+	script := `#!/bin/sh
+echo "INVOKED: $*" >> /tmp/fake-dolt-trace.log
+case "$1" in
+  version|--version) echo "dolt version 1.52.1" ;;
+  config)
+    case "$3" in
+      --get) echo "test" ;;
+      *) exit 0 ;;
+    esac ;;
+  init) exit 0 ;;
+  sql-server)
+    if [ "$2" = "--config" ]; then
+      echo "Fatal: unknown field auto_gc_behavior" >&2
+      exit 97
+    fi
+    port=""
+    prev=""
+    for a in "$@"; do
+      [ "$prev" = "-P" ] && port="$a"
+      [ "$prev" = "--port" ] && port="$a"
+      prev="$a"
+    done
+    { echo "SQLSERVER port=$port"; env | sort; } >> /tmp/fake-dolt-trace.log
+    python3 -c "import socket,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('127.0.0.1',$port)); s.listen(1); print('LISTENING',flush=True); time.sleep(60)" 2>> /tmp/fake-python-err.log &
+    echo "SPAWNED" >> /tmp/fake-dolt-trace.log
+    sleep 60
+    ;;
+  *) exit 0 ;;
+esac
+`
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// This test owns its server cleanup (it kills the started process
+	// itself), so the package TestMain's parent-death signal must stay off:
+	// with Pdeathsig the relaunched CLI child is reaped the moment the
+	// spawning thread retires, which is exactly the race under test.
+	t.Setenv("BEADS_TEST_PDEATHSIG", "")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// The fake binds its port but does not speak the SQL greeting; the
+	// contract under test is the relaunch, so readiness is the plain dial.
+	origWait := waitForReady
+	waitForReady = func(host string, port int, timeout time.Duration) error {
+		return nil
+	}
+	t.Cleanup(func() { waitForReady = origWait })
+
+	beadsDir := t.TempDir()
+	state, err := Start(beadsDir)
+	if err != nil {
+		// Dump the child's log: the failure's cause lives in the spawn log,
+		// and t.TempDir would delete it with the rest of the fixture.
+		if logData, readErr := os.ReadFile(logPath(beadsDir)); readErr == nil {
+			t.Fatalf("the degrade to CLI flags should start the server: %v\nchild log:\n%s",
+				err, logData)
+		}
+		t.Fatalf("the degrade to CLI flags should start the server: %v", err)
+	}
+	if !state.Running {
+		t.Fatal("expected a running server after the degrade")
+	}
+	if state.PID != 0 {
+		if proc, findErr := os.FindProcess(state.PID); findErr == nil {
+			_ = proc.Kill()
+		}
+	}
+	logData, readErr := os.ReadFile(logPath(beadsDir))
+	if readErr != nil {
+		t.Fatalf("read server log: %v", readErr)
+	}
+	if !strings.Contains(string(logData), "unknown field auto_gc_behavior") {
+		t.Fatalf("server log missing the child's rejected-key stderr:\n%s", logData)
+	}
+}
