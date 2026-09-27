@@ -338,7 +338,7 @@ Use the beads MCP server for native function calls instead of shell commands:
 
 ---
 
-**For detailed workflows and advanced features, see [AGENTS.md](../AGENTS.md)**
+**For detailed workflows and advanced features, see [AGENT_INSTRUCTIONS.md](AGENT_INSTRUCTIONS.md)**
 
 <!-- migrated from CLAUDE.md -->
 # Claude Code Entry Point for Beads
