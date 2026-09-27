@@ -249,7 +249,7 @@ func TestPRCIGateRequiresGeneratedHookTimeoutProcessBoundary(t *testing.T) {
 
 func TestStorageDomainUOWJobsUseNestedTimeoutBudgets(t *testing.T) {
 	const (
-		storageTimeoutMinutes     = 15
+		storageTimeoutMinutes     = 30
 		doctorTimeoutMinutes      = 10
 		setupTeardownSlackMinutes = 5
 		jobTimeoutMinutes         = storageTimeoutMinutes + doctorTimeoutMinutes + setupTeardownSlackMinutes

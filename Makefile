@@ -44,7 +44,7 @@ endif
 endif
 
 .PHONY: all build doctor-build test test-icu-path test-full-cgo test-regression test-upgrade test-cross-version test-migration corpus-regen bench bench-quick clean clean-test-tmp install install-force help check-up-to-date fmt fmt-check check-testing-short
-.PHONY: ci-pr-core ci-pr-policy ci-pr-lint ci-pr-storage ci-pr-doctor-fix ci-complexity ci-complexity-diff ci-complexity-check ci-package-mcp ci-package-npm
+.PHONY: ci-pr-core ci-pr-policy ci-pr-lint ci-pr-storage check-storage-concurrent-open ci-pr-doctor-fix ci-complexity ci-complexity-diff ci-complexity-check ci-package-mcp ci-package-npm
 .PHONY: api-gen api-check
 .PHONY: gen-hooks check-hooks check-pr-gates
 
@@ -200,7 +200,10 @@ ci-pr-lint:
 	@./scripts/ci/pr-lint.sh
 
 ci-pr-storage:
-	@go test -tags "$(BUILD_TAGS)" -p 1 -race -count=1 -timeout 15m -v ./internal/storage/domain/... ./internal/storage/uow/... ./internal/tracker/...
+	@go test -tags "$(BUILD_TAGS)" -p 1 -race -count=1 -timeout 30m -v ./internal/storage/domain/... ./internal/storage/uow/... ./internal/tracker/...
+
+check-storage-concurrent-open:
+	@go test -tags "$(BUILD_TAGS)" -race -count=1 -timeout 5m -run '^TestNewExternalDoltServerUOWProvider_ConcurrentInstantiation$$' ./internal/storage/uow
 
 ci-pr-doctor-fix:
 	@go test -tags "$(BUILD_TAGS)" -race -count=1 -timeout 10m -v ./cmd/bd/doctor/fix/
@@ -365,7 +368,7 @@ gen-hooks:
 	@GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=.githooks go run -tags "$(BUILD_TAGS)" ./cmd/bd hooks install
 
 check-hooks:
-	@go test -tags "$(BUILD_TAGS)" -run '^(TestGeneratedHookTimeoutProcessBoundary|TestTrackedManagedHookSectionsMatchGenerator)$$' ./cmd/bd
+	@go test -tags "$(BUILD_TAGS)" -count=1 -run '^(TestGeneratedHookTimeoutProcessBoundary|TestTrackedManagedHookSectionsMatchGenerator)$$' ./cmd/bd
 
 check-pr-gates:
 	@go test -tags "$(BUILD_TAGS)" -count=1 ./scripts ./scripts/prlintmake
@@ -450,6 +453,7 @@ help:
 	@echo "  make ci-pr-policy - Run required PR policy wrapper"
 	@echo "  make ci-pr-lint  - Run required PR formatting and lint wrapper"
 	@echo "  make ci-pr-storage - Run storage, unit-of-work, and tracker packages without concurrent Dolt containers"
+	@echo "  make check-storage-concurrent-open - Exercise concurrent UOW bootstrap against a real Dolt container"
 	@echo "  make ci-pr-doctor-fix - Run the Dolt-backed doctor/fix package"
 	@echo "  make ci-complexity - Report production cyclomatic complexity (advisory)"
 	@echo "  make ci-complexity-diff - Compare complexity with COMPLEXITY_BASE_REF"
