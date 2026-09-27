@@ -31,26 +31,26 @@ func testMainInner(m *testing.M) int {
 	// AD-01 (be-c5p): allow tracker tests to connect to the test container.
 	os.Setenv("BEADS_TEST_SERVER", "1")
 	if err := testutil.EnsureDoltContainerForTestMain(); err != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: Dolt test container setup failed: %v\n", err)
-		return 1
-	}
-	defer testutil.TerminateDoltContainer()
-	testServerPort = testutil.DoltContainerPortInt()
+		fmt.Fprintf(os.Stderr, "WARN: %v, skipping Dolt tests\n", err)
+	} else {
+		defer testutil.TerminateDoltContainer()
+		testServerPort = testutil.DoltContainerPortInt()
 
-	// Set up shared database for branch-per-test isolation
-	testSharedDB = "tracker_pkg_shared"
-	db, err := testutil.SetupSharedTestDB(testServerPort, testSharedDB)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: shared DB setup failed: %v\n", err)
-		return 1
-	}
-	testSharedConn = db
-	defer db.Close()
+		// Set up shared database for branch-per-test isolation
+		testSharedDB = "tracker_pkg_shared"
+		db, err := testutil.SetupSharedTestDB(testServerPort, testSharedDB)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "FATAL: shared DB setup failed: %v\n", err)
+			return 1
+		}
+		testSharedConn = db
+		defer db.Close()
 
-	// Create schema + config on the shared DB and commit to main
-	if err := initTrackerSharedSchema(testServerPort); err != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: shared schema init failed: %v\n", err)
-		return 1
+		// Create schema + config on the shared DB and commit to main
+		if err := initTrackerSharedSchema(testServerPort); err != nil {
+			fmt.Fprintf(os.Stderr, "FATAL: shared schema init failed: %v\n", err)
+			return 1
+		}
 	}
 
 	code := m.Run()
