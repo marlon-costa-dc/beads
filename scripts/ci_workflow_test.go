@@ -249,17 +249,13 @@ func TestPRCIGateRequiresGeneratedHookTimeoutProcessBoundary(t *testing.T) {
 
 func TestStorageDomainUOWJobsUseNestedTimeoutBudgets(t *testing.T) {
 	const (
-		storageTimeoutMinutes     = 15
+		storageTimeoutMinutes     = 30
 		doctorTimeoutMinutes      = 10
 		setupTeardownSlackMinutes = 5
 		jobTimeoutMinutes         = storageTimeoutMinutes + doctorTimeoutMinutes + setupTeardownSlackMinutes
 	)
-	storageCommand := fmt.Sprintf(
-		"go test -tags gms_pure_go -race -count=1 -timeout %dm -v ./internal/storage/domain/... ./internal/storage/uow/... ./internal/tracker/...",
-		storageTimeoutMinutes)
-	doctorCommand := fmt.Sprintf(
-		"go test -tags gms_pure_go -race -count=1 -timeout %dm -v ./cmd/bd/doctor/fix/",
-		doctorTimeoutMinutes)
+	const storageCommand = "make ci-pr-storage"
+	const doctorCommand = "make ci-pr-doctor-fix"
 
 	for _, workflowName := range []string{"pr.yml", "main.yml"} {
 		t.Run(workflowName, func(t *testing.T) {

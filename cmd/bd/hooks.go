@@ -68,8 +68,8 @@ const hookTimeoutSeconds = 300
 //     unbounded rather than silently pretending to enforce a deadline.
 //   - Only GNU coreutils timeout implementations are selected; Windows
 //     timeout.exe has the same name but an incompatible command line (GH#5503).
-//   - If the beads database is not initialized (exit code 3), the hook exits
-//     successfully with a warning so that git operations are not blocked.
+//   - Hook failures, including deadline expiry and a chained hook's exit 3,
+//     keep their original exit status so Git cannot report a false success.
 func generateHookSection(hookName string) string {
 	return hookSectionBeginLine() + "\n" +
 		"# This section is managed by beads. Do not remove these markers.\n" +
@@ -119,12 +119,7 @@ func generateHookSection(hookName string) string {
 		"    fi\n" +
 		"  fi\n" +
 		"  if { [ \"$_bd_timeout_backend\" = coreutils ] && [ \"$_bd_exit\" -eq 124 ]; } || { [ \"$_bd_timeout_backend\" = perl ] && [ \"$_bd_exit\" -eq 142 ]; }; then\n" +
-		"    echo >&2 \"beads: hook '" + hookName + "' timed out after ${_bd_timeout}s — continuing without beads\"\n" +
-		"    _bd_exit=0\n" +
-		"  fi\n" +
-		"  if [ \"$_bd_exit\" -eq 3 ]; then\n" +
-		"    echo >&2 \"beads: database not initialized — skipping hook '" + hookName + "'\"\n" +
-		"    _bd_exit=0\n" +
+		"    echo >&2 \"beads: hook '" + hookName + "' timed out after ${_bd_timeout}s\"\n" +
 		"  fi\n" +
 		"  if [ \"$_bd_exit\" -ne 0 ]; then exit \"$_bd_exit\"; fi\n" +
 		"fi\n" +

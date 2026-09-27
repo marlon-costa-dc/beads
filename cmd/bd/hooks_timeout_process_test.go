@@ -294,12 +294,12 @@ func testHookProcessReservedStatuses(t *testing.T) {
 		wantWarning   bool
 		wantDBWarning bool
 	}{
-		{name: "database-not-initialized is skipped", fixtures: gnu, bdExit: 3, wantDBWarning: true},
-		{name: "GNU owns 124", fixtures: gnu, bdExit: 124, wantWarning: true},
+		{name: "foreign exit 3 propagates", fixtures: gnu, bdExit: 3, wantExit: 3},
+		{name: "GNU preserves timeout 124", fixtures: gnu, bdExit: 124, wantExit: 124, wantWarning: true},
 		{name: "GNU preserves 137", fixtures: gnu, bdExit: 137, wantExit: 137},
 		{name: "GNU preserves 142", fixtures: gnu, bdExit: 142, wantExit: 142},
 		{name: "Perl preserves 124", fixtures: perl, bdExit: 124, wantExit: 124},
-		{name: "Perl owns 142", fixtures: perl, bdExit: 142, wantWarning: true},
+		{name: "Perl preserves alarm 142", fixtures: perl, bdExit: 142, wantExit: 142, wantWarning: true},
 		{name: "direct preserves 124", fixtures: direct, bdExit: 124, wantExit: 124},
 		{name: "direct preserves 137", fixtures: direct, bdExit: 137, wantExit: 137},
 		{name: "direct preserves 142", fixtures: direct, bdExit: 142, wantExit: 142},
@@ -329,11 +329,11 @@ func testHookProcessRealTimeoutExpiry(t *testing.T) {
 		timeout:  &timeout,
 		pathTail: helperDir,
 	})
-	if result.exitCode != 0 {
-		t.Fatalf("generated hook exit = %d, want normalized timeout success\n%s", result.exitCode, result.output)
+	if result.exitCode != 124 {
+		t.Fatalf("generated hook exit = %d, want timeout failure 124\n%s", result.exitCode, result.output)
 	}
 	if !strings.Contains(result.output, "long-running-bd-started") || !strings.Contains(result.output, "timed out after 1s") {
-		t.Fatalf("%s did not expire and normalize the responsive child\n%s", helperName, result.output)
+		t.Fatalf("%s did not expire the responsive child\n%s", helperName, result.output)
 	}
 	maxElapsed := 9 * time.Second
 	if result.elapsed > maxElapsed {
@@ -356,11 +356,11 @@ func testHookProcessRealPerlExpiry(t *testing.T) {
 		timeout:  &timeout,
 		pathTail: perlDir,
 	})
-	if result.exitCode != 0 {
-		t.Fatalf("generated hook exit = %d, want normalized Perl alarm success\n%s", result.exitCode, result.output)
+	if result.exitCode != 142 {
+		t.Fatalf("generated hook exit = %d, want Perl alarm failure 142\n%s", result.exitCode, result.output)
 	}
 	if !strings.Contains(result.output, "long-running-bd-started") || !strings.Contains(result.output, "timed out after 1s") {
-		t.Fatalf("real Perl did not expire and normalize the responsive child\n%s", result.output)
+		t.Fatalf("real Perl did not expire the responsive child\n%s", result.output)
 	}
 	if result.elapsed > 9*time.Second {
 		t.Errorf("Perl expiry took %s, want at most 9s", result.elapsed)

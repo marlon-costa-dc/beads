@@ -2,6 +2,7 @@ package uow
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -50,7 +51,13 @@ func newTestUOWProvider(t *testing.T) UnitOfWorkProvider {
 		false,
 		"",
 	)
-	require.NoError(t, err)
+	if err != nil {
+		serverLog, readErr := os.ReadFile(logPath)
+		if readErr != nil {
+			t.Fatalf("NewDoltServerUOWProvider: %v; read Dolt server log: %v", err, readErr)
+		}
+		t.Fatalf("NewDoltServerUOWProvider: %v; Dolt server log:\n%s", err, serverLog)
+	}
 	require.NotNil(t, provider)
 	t.Cleanup(func() { _ = provider.Close(context.Background()) })
 	return provider
