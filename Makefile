@@ -46,6 +46,7 @@ endif
 .PHONY: all build doctor-build test test-icu-path test-full-cgo test-regression test-upgrade test-cross-version test-migration corpus-regen bench bench-quick clean clean-test-tmp install install-force help check-up-to-date fmt fmt-check check-testing-short
 .PHONY: ci-pr-core ci-pr-policy ci-pr-lint ci-complexity ci-complexity-diff ci-complexity-check ci-package-mcp ci-package-npm
 .PHONY: api-gen api-check
+.PHONY: gen-hooks check-hooks
 
 # Default target
 all: build
@@ -353,6 +354,13 @@ endif
 
 install: check-up-to-date
 
+# Regenerate the tracked hooks through the Beads hook installer.
+gen-hooks:
+	@GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=.githooks go run -tags "$(BUILD_TAGS)" ./cmd/bd hooks install
+
+check-hooks:
+	@go test -tags "$(BUILD_TAGS)" -run '^(TestGeneratedHookTimeoutProcessBoundary|TestTrackedManagedHookSectionsMatchGenerator)$$' ./cmd/bd
+
 # Format all Go files
 fmt:
 	@echo "Formatting Go files..."
@@ -422,6 +430,8 @@ clean-test-tmp:
 help:
 	@echo "Beads Makefile targets:"
 	@echo "  make build        - Build the bd binary"
+	@echo "  make gen-hooks   - Regenerate tracked Git hooks from the current source"
+	@echo "  make check-hooks - Verify generated hook behavior and tracked copies"
 	@echo "  make doctor-build - Diagnose build env (GOFLAGS/CGO/CC) for the ICU build trap"
 	@echo "  make test         - Run all tests"
 	@echo "  make test-icu-path - Run opt-in ICU regex path tests (maintainer-only)"
