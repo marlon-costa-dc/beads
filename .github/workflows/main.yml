@@ -682,7 +682,7 @@ jobs:
       - name: Test domain + uow + tracker
         env:
           BEADS_TEST_BD_BINARY: ${{ github.workspace }}/ci-build-artifacts/bd-linux-gms-pure
-        run: go test -tags gms_pure_go -race -count=1 -timeout 15m -v ./internal/storage/domain/... ./internal/storage/uow/... ./internal/tracker/...
+        run: make ci-pr-storage
 
       # The doctor/fix DB-backed suite spins its own Dolt container in
       # TestMain. BEADS_FIX_REQUIRE_DOLT=1 turns a missing container into a
@@ -692,7 +692,7 @@ jobs:
         env:
           BEADS_TEST_BD_BINARY: ${{ github.workspace }}/ci-build-artifacts/bd-linux-gms-pure
           BEADS_FIX_REQUIRE_DOLT: "1"
-        run: go test -tags gms_pure_go -race -count=1 -timeout 10m -v ./cmd/bd/doctor/fix/
+        run: make ci-pr-doctor-fix
 
   main-linux-integration-packages:
     name: Main Linux integration packages (${{ matrix.shard }}/6)

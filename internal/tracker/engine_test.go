@@ -19,7 +19,7 @@ func newTestStore(t *testing.T) *dolt.DoltStore {
 	t.Helper()
 	testutil.RequireDoltBinary(t)
 	if testServerPort == 0 || testSharedDB == "" {
-		t.Skip("shared test Dolt database not initialized, skipping test")
+		t.Fatal("shared test Dolt database not initialized")
 	}
 	ctx := context.Background()
 	store, err := dolt.New(ctx, &dolt.Config{
