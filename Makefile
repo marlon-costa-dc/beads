@@ -364,7 +364,7 @@ check-hooks:
 # Format all Go files
 fmt:
 	@echo "Formatting Go files..."
-	@gofmt -w .
+	@"$$(go env GOROOT)/bin/gofmt" -w .
 	@echo "Done"
 
 # Check that all Go files are properly formatted (for CI)
