@@ -294,7 +294,7 @@ func testHookProcessReservedStatuses(t *testing.T) {
 		wantWarning   bool
 		wantDBWarning bool
 	}{
-		{name: "database-not-initialized fails", fixtures: gnu, bdExit: 3, wantExit: 3, wantDBWarning: true},
+		{name: "foreign exit 3 propagates", fixtures: gnu, bdExit: 3, wantExit: 3},
 		{name: "GNU preserves timeout 124", fixtures: gnu, bdExit: 124, wantExit: 124, wantWarning: true},
 		{name: "GNU preserves 137", fixtures: gnu, bdExit: 137, wantExit: 137},
 		{name: "GNU preserves 142", fixtures: gnu, bdExit: 142, wantExit: 142},
