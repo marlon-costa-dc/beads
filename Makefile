@@ -368,7 +368,7 @@ check-hooks:
 	@go test -tags "$(BUILD_TAGS)" -run '^(TestGeneratedHookTimeoutProcessBoundary|TestTrackedManagedHookSectionsMatchGenerator)$$' ./cmd/bd
 
 check-pr-gates:
-	@go test -tags "$(BUILD_TAGS)" ./scripts ./scripts/prlintmake
+	@go test -tags "$(BUILD_TAGS)" -count=1 ./scripts ./scripts/prlintmake
 
 # Format all Go files
 fmt:
