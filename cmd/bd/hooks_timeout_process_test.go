@@ -128,12 +128,22 @@ func TestGeneratedHookTimeoutProcessBoundary(t *testing.T) {
 	t.Run("shell options preserve argv and status", testHookProcessShellOptions)
 	t.Run("POSIX sh preserves argv and status", testHookProcessPOSIXShell)
 	t.Run("reserved statuses are backend scoped", testHookProcessReservedStatuses)
-	t.Run("real GNU timeout expires a responsive child", testHookProcessRealTimeoutExpiry)
+	t.Run("real coreutils timeout expires a responsive child", testHookProcessRealTimeoutExpiry)
 	t.Run("real Perl alarm expires a responsive child", testHookProcessRealPerlExpiry)
 	t.Run("Windows checkout rejects System32 timeout", testHookProcessWindowsSystemTimeoutCheckout)
 }
 
 func testHookProcessBackendSelection(t *testing.T) {
+	// Derive the uutils helper from the GNU stub so the two differ only in the
+	// banner, but fail loudly if that banner ever moves: strings.Replace returns
+	// its input unchanged when the pattern is absent, which would silently turn
+	// the uutils case into a second copy of the GNU one.
+	const hookProcessGNUTimeoutBanner = "(GNU coreutils) 9.99"
+	uutilsTimeoutStub := strings.Replace(hookProcessGNUTimeoutStub, hookProcessGNUTimeoutBanner, "(uutils coreutils) 0.10.0", 1)
+	if uutilsTimeoutStub == hookProcessGNUTimeoutStub {
+		t.Fatalf("uutils fixture is a copy of the GNU stub: %q not found in hookProcessGNUTimeoutStub", hookProcessGNUTimeoutBanner)
+	}
+
 	tests := []struct {
 		name        string
 		fixtures    []hookProcessFixture
@@ -147,6 +157,14 @@ func testHookProcessBackendSelection(t *testing.T) {
 				{name: "gtimeout", body: hookProcessGNUGtimeoutStub},
 			},
 			wantHelper: "helper=gtimeout",
+		},
+		{
+			name: "uutils coreutils timeout is selected like GNU",
+			fixtures: []hookProcessFixture{
+				{name: "timeout", body: uutilsTimeoutStub},
+				{name: "gtimeout", body: hookProcessGNUGtimeoutStub},
+			},
+			wantHelper: "helper=timeout",
 		},
 		{
 			name: "nonzero GNU-looking probe yields to gtimeout",
@@ -294,12 +312,12 @@ func testHookProcessReservedStatuses(t *testing.T) {
 		wantWarning   bool
 		wantDBWarning bool
 	}{
-		{name: "database-not-initialized is skipped", fixtures: gnu, bdExit: 3, wantDBWarning: true},
-		{name: "GNU owns 124", fixtures: gnu, bdExit: 124, wantWarning: true},
+		{name: "foreign exit 3 propagates", fixtures: gnu, bdExit: 3, wantExit: 3},
+		{name: "GNU preserves timeout 124", fixtures: gnu, bdExit: 124, wantExit: 124, wantWarning: true},
 		{name: "GNU preserves 137", fixtures: gnu, bdExit: 137, wantExit: 137},
 		{name: "GNU preserves 142", fixtures: gnu, bdExit: 142, wantExit: 142},
 		{name: "Perl preserves 124", fixtures: perl, bdExit: 124, wantExit: 124},
-		{name: "Perl owns 142", fixtures: perl, bdExit: 142, wantWarning: true},
+		{name: "Perl preserves alarm 142", fixtures: perl, bdExit: 142, wantExit: 142, wantWarning: true},
 		{name: "direct preserves 124", fixtures: direct, bdExit: 124, wantExit: 124},
 		{name: "direct preserves 137", fixtures: direct, bdExit: 137, wantExit: 137},
 		{name: "direct preserves 142", fixtures: direct, bdExit: 142, wantExit: 142},
@@ -322,18 +340,18 @@ func testHookProcessReservedStatuses(t *testing.T) {
 }
 
 func testHookProcessRealTimeoutExpiry(t *testing.T) {
-	helperName, helperDir := findHookProcessGNUTimeout(t)
+	helperName, helperDir := findHookProcessCoreutilsTimeout(t)
 	timeout := "1"
 	result := runGeneratedHookProcess(t, hookProcessCase{
 		bdBody:   hookProcessLongRunningBDStub,
 		timeout:  &timeout,
 		pathTail: helperDir,
 	})
-	if result.exitCode != 0 {
-		t.Fatalf("generated hook exit = %d, want normalized timeout success\n%s", result.exitCode, result.output)
+	if result.exitCode != 124 {
+		t.Fatalf("generated hook exit = %d, want timeout failure 124\n%s", result.exitCode, result.output)
 	}
 	if !strings.Contains(result.output, "long-running-bd-started") || !strings.Contains(result.output, "timed out after 1s") {
-		t.Fatalf("%s did not expire and normalize the responsive child\n%s", helperName, result.output)
+		t.Fatalf("%s did not expire the responsive child\n%s", helperName, result.output)
 	}
 	maxElapsed := 9 * time.Second
 	if result.elapsed > maxElapsed {
@@ -356,11 +374,11 @@ func testHookProcessRealPerlExpiry(t *testing.T) {
 		timeout:  &timeout,
 		pathTail: perlDir,
 	})
-	if result.exitCode != 0 {
-		t.Fatalf("generated hook exit = %d, want normalized Perl alarm success\n%s", result.exitCode, result.output)
+	if result.exitCode != 142 {
+		t.Fatalf("generated hook exit = %d, want Perl alarm failure 142\n%s", result.exitCode, result.output)
 	}
 	if !strings.Contains(result.output, "long-running-bd-started") || !strings.Contains(result.output, "timed out after 1s") {
-		t.Fatalf("real Perl did not expire and normalize the responsive child\n%s", result.output)
+		t.Fatalf("real Perl did not expire the responsive child\n%s", result.output)
 	}
 	if result.elapsed > 9*time.Second {
 		t.Errorf("Perl expiry took %s, want at most 9s", result.elapsed)
@@ -513,13 +531,18 @@ shift
 	return hookProcessResult{output: string(output), exitCode: exitCode, elapsed: elapsed}
 }
 
-func findHookProcessGNUTimeout(t *testing.T) (string, string) {
+// findHookProcessCoreutilsTimeout mirrors the generated shim's identity
+// allowlist (cmd/bd/hooks.go generateHookSection). Keep the `case` here in step
+// with the one the generator emits: this is the second copy of that contract,
+// and a narrower copy silently skips the only test that drives a real timeout
+// binary on exactly the hosts the wider allowlist exists for.
+func findHookProcessCoreutilsTimeout(t *testing.T) (string, string) {
 	t.Helper()
 	probe := `for _bd_test_candidate in timeout gtimeout; do
   if command -v "$_bd_test_candidate" >/dev/null 2>&1 &&
      _bd_test_version="$("$_bd_test_candidate" --version 2>/dev/null)"; then
     case "$_bd_test_version" in
-      "timeout (GNU coreutils) "*)
+      "timeout (GNU coreutils) "*|"timeout (uutils coreutils) "*)
         _bd_test_path=$(command -v "$_bd_test_candidate")
         printf '%s\n%s\n' "$_bd_test_candidate" "${_bd_test_path%/*}"
         exit 0
@@ -533,11 +556,11 @@ exit 1
 	cmd.Env = hookProcessEnv()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Skipf("compatible GNU timeout is unavailable: %s", strings.TrimSpace(string(output)))
+		t.Skipf("no compatible coreutils timeout is available: %s", strings.TrimSpace(string(output)))
 	}
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	if len(lines) != 2 || lines[0] == "" || lines[1] == "" {
-		t.Fatalf("unexpected GNU timeout probe output: %q", string(output))
+		t.Fatalf("unexpected coreutils timeout probe output: %q", string(output))
 	}
 	return lines[0], lines[1]
 }

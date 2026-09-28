@@ -127,6 +127,19 @@ func isProcessInDir(pid int, dir string) bool {
 // isProcessAlive checks if a process with the given PID is running.
 // Uses signal 0 which doesn't send a signal but checks process existence.
 func isProcessAlive(pid int) bool {
+	// A zombie child of THIS process still answers Signal(0) — it exited but
+	// was never waited on (the launch path releases the handle without a
+	// wait). Reap it non-blocking first: if Wait4 returns it, it is dead by
+	// definition; ECHILD means it was never ours, and the Signal(0) probe
+	// keeps its contract for foreign pids.
+	var status syscall.WaitStatus
+	found, waitErr := syscall.Wait4(pid, &status, syscall.WNOHANG, nil)
+	if waitErr == nil && found == pid {
+		return false
+	}
+	if waitErr != nil && waitErr != syscall.ECHILD {
+		return false
+	}
 	process, err := os.FindProcess(pid)
 	if err != nil {
 		return false

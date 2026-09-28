@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/steveyegge/beads/internal/testutil"
+	"github.com/steveyegge/beads/internal/testutil/bazeltest"
 )
 
 // ---------------------------------------------------------------------------
@@ -100,6 +101,12 @@ func requireDoltStore(t *testing.T, what string) {
 func buildBD(t *testing.T) string {
 	t.Helper()
 	bdOnce.Do(func() {
+		// Under Bazel the binary is injected (//cmd/bd:bd_for_tests); there is
+		// no toolchain or module tree to build from. Plain go test is unchanged.
+		if bazeltest.IsBazel() {
+			bdPath, bdErr = bazeltest.PrebuiltBD()
+			return
+		}
 		bin := "bd-protocol"
 		if runtime.GOOS == "windows" {
 			bin += ".exe"
@@ -122,6 +129,9 @@ func buildBD(t *testing.T) string {
 			bdErr = fmt.Errorf("go build: %w\n%s", err, out)
 		}
 	})
+	if bdErr != nil && bazeltest.IsBazel() {
+		t.Fatalf("bd binary for tests: %v", bdErr) // a wiring bug, never a skip
+	}
 	if bdErr != nil {
 		t.Skipf("skipping: failed to build bd: %v", bdErr)
 	}
@@ -235,6 +245,18 @@ func (w *workspace) env() []string {
 	}
 	if v := os.Getenv("TMPDIR"); v != "" {
 		env = append(env, "TMPDIR="+v)
+	}
+	// TZ must reach the child. This env is a whitelist, so without this the bd
+	// subprocess inherits no TZ and its time.Local falls back to
+	// /etc/localtime, while the TEST process uses its own TZ. Assertions that
+	// compute an expectation from the parent's time.Local and compare it to a
+	// value the child produced then disagree whenever the two zones differ —
+	// see TestProtocol_FieldsRoundTrip, which parses a date-only due_at in
+	// time.Local and asserts the stored UTC day. CI passes only because its
+	// runners have TZ unset AND a UTC system zone, so both sides agree by
+	// accident.
+	if v := os.Getenv("TZ"); v != "" {
+		env = append(env, "TZ="+v)
 	}
 	return env
 }

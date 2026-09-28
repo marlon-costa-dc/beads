@@ -8,115 +8,73 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/steveyegge/beads/internal/testutil/bazeltest"
 )
 
 func TestFmtCheckClean(t *testing.T) {
-	output, err := runFmtCheck(t, "exit 0\n")
+	output, err := runFmtCheck(t, "package fixture\n", "")
 	if err != nil {
 		t.Fatalf("fmt-check failed: %v\n%s", err, output)
 	}
-	want := "Checking Go formatting...\nAll Go files are properly formatted\n"
-	if output != want {
-		t.Fatalf("output = %q, want %q", output, want)
+	if !strings.Contains(output, "All Go files are properly formatted") {
+		t.Fatalf("clean file was not accepted:\n%s", output)
 	}
 }
 
 func TestFmtCheckReportsUnformattedFiles(t *testing.T) {
-	output, err := runFmtCheck(t, "printf '%s\\n' cmd/bd/main.go internal/config/config.go\n")
+	output, err := runFmtCheck(t, "package fixture\nfunc main(){println(\"x\")}\n", "")
 	if got := processExitCode(err); got != 1 {
 		t.Fatalf("exit = %d, want 1; error=%v\n%s", got, err, output)
 	}
-	want := "Checking Go formatting...\n" +
-		"The following files are not properly formatted:\n" +
-		"cmd/bd/main.go\n" +
-		"internal/config/config.go\n\n" +
-		"Run 'make fmt' to fix formatting\n"
-	if output != want {
-		t.Fatalf("output = %q, want %q", output, want)
+	if !strings.Contains(output, "main.go") || !strings.Contains(output, "Run 'make fmt' to fix formatting") {
+		t.Fatalf("unformatted file was not reported:\n%s", output)
 	}
 }
 
-func TestFmtCheckPreservesGofmtFailure(t *testing.T) {
-	output, err := runFmtCheck(t, "printf 'synthetic gofmt failure\\n' >&2\nexit 42\n")
-	if got := processExitCode(err); got != 42 {
-		t.Fatalf("exit = %d, want 42; error=%v\n%s", got, err, output)
+func TestFmtCheckFailsWhenToolchainCannotResolve(t *testing.T) {
+	output, err := runFmtCheck(t, "package fixture\n", "invalid")
+	if got := processExitCode(err); got == 0 {
+		t.Fatalf("invalid toolchain reported success: error=%v\n%s", err, output)
 	}
-	for _, want := range []string{
-		"Checking Go formatting...",
-		"synthetic gofmt failure",
-		"gofmt failed while checking formatting",
-	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("missing %q in output:\n%s", want, output)
-		}
+	if !strings.Contains(output, "GOTOOLCHAIN") || strings.Contains(output, "All Go files are properly formatted") {
+		t.Fatalf("toolchain failure was hidden:\n%s", output)
 	}
 }
 
-func runFmtCheck(t *testing.T, gofmtBody string) (string, error) {
+// runFmtCheck exercises the public script with the real Go toolchain in an
+// isolated repository fixture. PATH stubs cannot validate toolchain selection.
+func runFmtCheck(t *testing.T, goSource, toolchain string) (string, error) {
 	t.Helper()
-	bash := testBash(t)
-	testRoot := t.TempDir()
-	shimDir := filepath.Join(testRoot, "fmt shims")
-	if err := os.MkdirAll(shimDir, 0o755); err != nil {
+	root := t.TempDir()
+	scriptDir := filepath.Join(root, "scripts", "ci")
+	if err := os.MkdirAll(scriptDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeShellExecutable(t, bash, filepath.Join(shimDir, "gofmt"), "#!/usr/bin/env bash\nset -euo pipefail\n"+gofmtBody)
-
-	path := shimDir + string(os.PathListSeparator) + os.Getenv("PATH")
-	if runtime.GOOS == "windows" {
-		path = msysPath(shimDir) + ":/usr/bin:/bin"
-	}
-	cmd := exec.Command(
-		bash,
-		"--noprofile",
-		"--norc",
-		"--",
-		shellVisiblePath(filepath.Join(sourceRepoRoot(), "scripts", "ci", "fmt-check.sh")),
-	)
-	cmd.Dir = sourceRepoRoot()
-	cmd.Env = environment(map[string]string{
-		"BASH_ENV":  "",
-		"BASHOPTS":  "",
-		"ENV":       "",
-		"LANG":      "C",
-		"LC_ALL":    "C",
-		"PATH":      path,
-		"SHELLOPTS": "",
-	})
-	output, err := cmd.CombinedOutput()
-	return normalizeNewlines(string(output)), err
-}
-
-func writeShellExecutable(t *testing.T, bash, path, body string) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte(strings.ReplaceAll(body, "\r\n", "\n")), 0o755); err != nil {
+	script, err := os.ReadFile(filepath.Join(sourceRepoRoot(), "scripts", "ci", "fmt-check.sh"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.GOOS != "windows" {
-		if err := os.Chmod(path, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		return
+	scriptPath := filepath.Join(scriptDir, "fmt-check.sh")
+	if err := os.WriteFile(scriptPath, script, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	cmd := exec.Command(bash, "--noprofile", "--norc", "-c", `/usr/bin/chmod +x "$1"`, "--", msysPath(path))
-	cmd.Env = environment(map[string]string{
-		"BASH_ENV":  "",
-		"BASHOPTS":  "",
-		"ENV":       "",
-		"SHELLOPTS": "",
-	})
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("make %s executable: %v\n%s", path, err, output)
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte(goSource), 0o644); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func testBash(t *testing.T) string {
-	t.Helper()
-	path, err := exec.LookPath("bash")
+	bash, err := exec.LookPath("bash")
 	if err != nil {
 		t.Fatalf("bash is required: %v", err)
 	}
-	return path
+	cmd := exec.Command(bash, "--noprofile", "--norc", "--", shellVisiblePath(scriptPath))
+	cmd.Dir = root
+	overrides := map[string]string{"BASH_ENV": "", "BASHOPTS": "", "ENV": "", "LANG": "C", "LC_ALL": "C", "SHELLOPTS": ""}
+	if toolchain != "" {
+		overrides["GOTOOLCHAIN"] = toolchain
+	}
+	cmd.Env = environment(overrides)
+	output, err := cmd.CombinedOutput()
+	return strings.ReplaceAll(string(output), "\r\n", "\n"), err
 }
 
 func environment(overrides map[string]string) []string {
@@ -153,24 +111,18 @@ func sourceRepoRoot() string {
 	if !ok {
 		panic("runtime.Caller failed")
 	}
-	return filepath.Dir(filepath.Dir(filepath.Dir(file)))
+	// Under Bazel the caller path is workspace-relative; CallerDir rebuilds it
+	// under the runfiles root, which holds the declared fmt-check.sh.
+	return filepath.Dir(filepath.Dir(bazeltest.CallerDir(file, "scripts/prlintmake")))
 }
 
 func shellVisiblePath(path string) string {
-	if runtime.GOOS == "windows" {
-		return msysPath(path)
+	if runtime.GOOS != "windows" {
+		return path
 	}
-	return path
-}
-
-func msysPath(path string) string {
 	path = filepath.ToSlash(filepath.Clean(path))
 	if len(path) >= 3 && path[1] == ':' && path[2] == '/' {
 		return "/" + strings.ToLower(path[:1]) + path[2:]
 	}
 	return path
-}
-
-func normalizeNewlines(value string) string {
-	return strings.ReplaceAll(value, "\r\n", "\n")
 }

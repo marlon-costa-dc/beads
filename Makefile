@@ -44,8 +44,10 @@ endif
 endif
 
 .PHONY: all build doctor-build test test-icu-path test-full-cgo test-regression test-upgrade test-cross-version test-migration corpus-regen bench bench-quick clean clean-test-tmp install install-force help check-up-to-date fmt fmt-check check-testing-short
-.PHONY: ci-pr-core ci-pr-policy ci-pr-lint ci-package-mcp ci-package-npm
+.PHONY: ci-pr-core ci-pr-policy ci-pr-lint ci-pr-storage check-storage-concurrent-open ci-pr-doctor-fix ci-complexity ci-complexity-diff ci-complexity-check ci-package-mcp ci-package-npm
 .PHONY: api-gen api-check
+.PHONY: gen-hooks check-hooks check-pr-gates
+.PHONY: bazel-sync bazel-sync-check
 
 # Default target
 all: build
@@ -198,6 +200,26 @@ ci-pr-policy:
 ci-pr-lint:
 	@./scripts/ci/pr-lint.sh
 
+ci-pr-storage:
+	@go test -tags "$(BUILD_TAGS)" -p 1 -race -count=1 -timeout 30m -v ./internal/storage/domain/... ./internal/storage/uow/... ./internal/tracker/...
+
+check-storage-concurrent-open:
+	@go test -tags "$(BUILD_TAGS)" -race -count=1 -timeout 5m -run '^TestNewExternalDoltServerUOWProvider_ConcurrentInstantiation$$' ./internal/storage/uow
+
+ci-pr-doctor-fix:
+	@go test -tags "$(BUILD_TAGS)" -race -count=1 -timeout 10m -v ./cmd/bd/doctor/fix/
+
+# Opt-in architecture experiment. Install gocyclo v0.6.0 first;
+# report is advisory while check exercises the local baseline guard.
+ci-complexity:
+	@./scripts/ci/complexity.sh report
+
+ci-complexity-diff:
+	@./scripts/ci/complexity.sh diff
+
+ci-complexity-check:
+	@./scripts/ci/complexity.sh check
+
 # The generated half of the wire contract. The document is hand-written and is
 # the source of truth; this file is its output.
 API_GEN_FILE := internal/httpapi/apigen/types.gen.go
@@ -277,6 +299,15 @@ corpus-regen:
 	@echo "Regenerating contract corpus..."
 	go test -tags "$(BUILD_TAGS)" ./cmd/bd/protocol -run TestCorpusGolden -corpus.update -count=1
 
+# The tracked .githooks/* carry the managed section cmd/bd/hooks.go generates;
+# TestTrackedManagedHookSectionsMatchGenerator holds them byte-equal. Run this
+# after changing the generator or after bumping Version in cmd/bd/version.go
+# (the section markers carry the version), then commit the regenerated hooks
+# alongside it.
+githooks-regen:
+	@echo "Regenerating managed sections in .githooks/*..."
+	BD_UPDATE_HOOKS_GOLDEN=1 go test -tags "$(BUILD_TAGS)" ./cmd/bd -run TestTrackedManagedHookSectionsMatchGenerator -count=1
+
 
 # Run performance benchmarks against Dolt storage backend
 # Requires CGO and Dolt; generates CPU profile files
@@ -342,10 +373,20 @@ endif
 
 install: check-up-to-date
 
+# Regenerate the tracked hooks through the Beads hook installer.
+gen-hooks:
+	@GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=.githooks go run -tags "$(BUILD_TAGS)" ./cmd/bd hooks install
+
+check-hooks:
+	@go test -tags "$(BUILD_TAGS)" -count=1 -run '^(TestGeneratedHookTimeoutProcessBoundary|TestTrackedManagedHookSectionsMatchGenerator)$$' ./cmd/bd
+
+check-pr-gates:
+	@go test -tags "$(BUILD_TAGS)" -count=1 ./scripts ./scripts/prlintmake
+
 # Format all Go files
 fmt:
 	@echo "Formatting Go files..."
-	@gofmt -w .
+	@"$$(go env GOROOT)/bin/gofmt" -w .
 	@echo "Done"
 
 # Check that all Go files are properly formatted (for CI)
@@ -388,6 +429,23 @@ diagrams-excalidraw:
 docs-dev:
 	./mint.sh dev
 
+# Bazel (side-by-side with the Go toolchain; `go build`/`go test` do not need
+# it). Regenerate BUILD.bazel files with gazelle and refresh the MODULE.bazel
+# use_repo list + MODULE.bazel.lock, then refresh the go_srcs filegroups that
+# source-scanning tests declare as data (tools/bazel/go_srcs.py). Run after
+# changing Go imports, go.mod, or packages.
+BAZEL ?= bazel
+bazel-sync:
+	$(BAZEL) run //:gazelle
+	python3 tools/bazel/go_srcs.py
+	$(BAZEL) mod tidy
+
+# Fail (printing a diff) when a go_srcs block that tools/bazel/go_srcs.py
+# manages is stale, e.g. after gazelle added a package under a scanned tree.
+# Needs no Bazel; scripts/bazel_policy_test.go runs the same check.
+bazel-sync-check:
+	python3 tools/bazel/go_srcs.py --check
+
 # Ensure -short is not used as an implicit CI tier boundary.
 check-testing-short:
 	@./scripts/check-testing-short.sh
@@ -411,6 +469,9 @@ clean-test-tmp:
 help:
 	@echo "Beads Makefile targets:"
 	@echo "  make build        - Build the bd binary"
+	@echo "  make gen-hooks   - Regenerate tracked Git hooks from the current source"
+	@echo "  make check-hooks - Verify generated hook behavior and tracked copies"
+	@echo "  make check-pr-gates - Verify PR workflow wiring and formatting script behavior"
 	@echo "  make doctor-build - Diagnose build env (GOFLAGS/CGO/CC) for the ICU build trap"
 	@echo "  make test         - Run all tests"
 	@echo "  make test-icu-path - Run opt-in ICU regex path tests (maintainer-only)"
@@ -418,6 +479,12 @@ help:
 	@echo "  make ci-pr-core  - Run required PR core Go test wrapper"
 	@echo "  make ci-pr-policy - Run required PR policy wrapper"
 	@echo "  make ci-pr-lint  - Run required PR formatting and lint wrapper"
+	@echo "  make ci-pr-storage - Run storage, unit-of-work, and tracker packages without concurrent Dolt containers"
+	@echo "  make check-storage-concurrent-open - Exercise concurrent UOW bootstrap against a real Dolt container"
+	@echo "  make ci-pr-doctor-fix - Run the Dolt-backed doctor/fix package"
+	@echo "  make ci-complexity - Report production cyclomatic complexity (advisory)"
+	@echo "  make ci-complexity-diff - Compare complexity with COMPLEXITY_BASE_REF"
+	@echo "  make ci-complexity-check - Check complexity against the local baseline"
 	@echo "  make ci-package-mcp - Run MCP Python package gate"
 	@echo "  make ci-package-npm - Run npm package gate"
 	@echo "  make test-regression - Run differential regression tests (baseline vs candidate)"
@@ -433,6 +500,8 @@ help:
 	@echo "  make check-docs   - Validate docs against CLI flags"
 	@echo "  make api-gen      - Regenerate HTTP API types from the OpenAPI spec"
 	@echo "  make api-check    - OpenAPI drift gate (regenerate, diff-or-fail, spec tests)"
+	@echo "  make bazel-sync   - Regenerate Bazel BUILD files and tidy MODULE.bazel (gazelle + mod tidy)"
+	@echo "  make bazel-sync-check - Fail if generated go_srcs Bazel filegroups are stale"
 	@echo "  make clean        - Remove build artifacts and profile files"
 	@echo "  make clean-test-tmp - Sweep orphaned cmd/bd test temp dirs from \$$TMPDIR"
 	@echo "  make help         - Show this help message"

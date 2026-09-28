@@ -5,7 +5,9 @@ on:
     # release/** is here because release-prep and release-fix PRs are based on
     # the release branch, not on main. Without it they run almost no CI and the
     # first full signal is the tag build, where a failure burns the tag.
-    branches: [ main, 'release/**' ]
+    # dc-use is this fork's integration branch; trigger filters cannot read
+    # repository variables, so it is named here.
+    branches: [ main, 'release/**', dc-use ]
   merge_group:
 
 concurrency:
@@ -251,7 +253,7 @@ jobs:
         # is available; the goal here is to catch compile-time contamination,
         # not run the full suite.
         run: |
-          go test -tags gms_pure_go -count=1 -short -run '^Test(Help|CheckRemoteSafety|FormatDestroyToken|ShouldWireInitRemote|ExtractPrefix|IsNumericID|GetWorktreeGitDir|DriftItemStatuses|RunDriftChecks|IsServerProbablyRunning|CheckHooksDriftNotGitRepo|CheckServerDriftNoBeadsDir|CheckRemoteDriftNoBeadsDir)' ./cmd/bd
+          go test -tags gms_pure_go -count=1 -short -run '^Test(Help|CheckRemoteSafety|FormatDestroyToken|ShouldWireInitRemote|ExtractPrefix|IsNumericID|GetWorktreeGitDir|DriftItemStatuses|RunDriftChecks|IsServerProbablyRunning|CheckHooksDriftNotGitRepo|CheckServerDriftNoBeadsDir|CheckRemoteDriftNoBeadsDir|NocgoFactoriesHonorSharedServer|NocgoNewDoltStoreFromConfig_ErrorSuggestsCorrectFlag|NocgoNewReadOnlyStoreFromConfig_ErrorSuggestsCorrectFlag)' ./cmd/bd
 
   # The lingering-handle liveness regression test is //go:build windows: the
   # Ubuntu job above selects it by name but compiles it out, and main.yml's
@@ -520,6 +522,11 @@ jobs:
         shell: bash
         run: go test -tags gms_pure_go -count=1 -run '^(TestCleanEnvUsesHostKeySemantics|TestBenchmarkCommandBuildersStripDoltEnvOverrides)$' ./scripts/repro-dolt-prod-timeouts
 
+      - name: Check shared environment key semantics
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: bash scripts/ci/test-windows-env-helpers.sh
+
   # Fast check to catch accidental .beads/issues.jsonl changes from contributors
   check-no-beads-changes:
     name: Check for .beads changes
@@ -728,6 +735,7 @@ jobs:
 
       - name: Run PR core wrapper
         env:
+          BEADS_TEST_REQUIRE_EXCLUDE_PERMISSION: '1'
           BEADS_TEST_BD_BINARY: ${{ github.workspace }}/ci-build-artifacts/bd-linux-gms-pure
           GOCACHE: ${{ runner.temp }}/go-cache/race
         run: make ci-pr-core
@@ -759,6 +767,65 @@ jobs:
           BD_LINT_NEW_FROM_MERGE_BASE: origin/main
         run: make ci-pr-lint
 
+  # Advisory architecture signal. This deliberately does not participate in
+  # ci-gate while maintainers evaluate the baseline and refactoring payoff.
+  complexity-report:
+    name: Complexity report (advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        timeout-minutes: 3
+        continue-on-error: true
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        timeout-minutes: 3
+        continue-on-error: true
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+          cache: false
+
+      - name: Install gocyclo
+        timeout-minutes: 5
+        continue-on-error: true
+        run: go install github.com/fzipp/gocyclo/cmd/gocyclo@v0.6.0
+
+      - name: Generate complexity report
+        id: generate-complexity
+        if: always()
+        timeout-minutes: 8
+        continue-on-error: true
+        run: |
+          set +e
+          COMPLEXITY_BASE_REF=origin/main ./scripts/ci/complexity.sh diff > complexity-report.txt 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "complexity report unavailable (exit $status); see log above" >> complexity-report.txt
+          fi
+          exit 0
+
+      - name: Annotate unavailable complexity report
+        if: always()
+        timeout-minutes: 1
+        continue-on-error: true
+        run: |
+          if [ ! -s complexity-report.txt ] || grep -q 'complexity report unavailable' complexity-report.txt; then
+            echo "::warning title=Complexity report unavailable::Advisory complexity analysis did not complete; inspect the artifact or job log."
+          fi
+
+      - name: Upload complexity report
+        if: always()
+        timeout-minutes: 3
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: complexity-report
+          path: complexity-report.txt
+          retention-days: 7
+          if-no-files-found: error
+
   # Focused job for the hexagonal storage layer (internal/storage/domain/* and
   # internal/storage/uow). These packages back the proxied-server init path and
   # also live behind the existing ./... matrix, but TestDomainDB requires the
@@ -771,7 +838,7 @@ jobs:
     needs: build-artifacts
     # The race-enabled storage package has outgrown Go's implicit 10-minute
     # timeout. Keep both per-package deadlines inside one finite job budget.
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
 
@@ -815,7 +882,7 @@ jobs:
       - name: Test domain + uow + tracker
         env:
           BEADS_TEST_BD_BINARY: ${{ github.workspace }}/ci-build-artifacts/bd-linux-gms-pure
-        run: go test -tags gms_pure_go -race -count=1 -timeout 15m -v ./internal/storage/domain/... ./internal/storage/uow/... ./internal/tracker/...
+        run: make ci-pr-storage
 
       # The doctor/fix DB-backed suite spins its own Dolt container in
       # TestMain. BEADS_FIX_REQUIRE_DOLT=1 turns a missing container into a
@@ -825,7 +892,7 @@ jobs:
         env:
           BEADS_TEST_BD_BINARY: ${{ github.workspace }}/ci-build-artifacts/bd-linux-gms-pure
           BEADS_FIX_REQUIRE_DOLT: "1"
-        run: go test -tags gms_pure_go -race -count=1 -timeout 10m -v ./cmd/bd/doctor/fix/
+        run: make ci-pr-doctor-fix
 
   # macOS-only regressions were landing on main undetected: main.yml's Test
   # (macos-latest) leg only runs `if: github.event_name == 'push' &&

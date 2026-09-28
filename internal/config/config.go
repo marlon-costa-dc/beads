@@ -1,9 +1,7 @@
 package config
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,8 +9,26 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+	"github.com/steveyegge/beads/internal/ceiling"
 	"github.com/steveyegge/beads/internal/debug"
+	"github.com/steveyegge/beads/internal/gitenv"
 	"gopkg.in/yaml.v3"
+)
+
+const (
+	// ProjectConfigFileName is the tracked per-workspace config file, read from
+	// a .beads directory.
+	ProjectConfigFileName = "config.yaml"
+	// LocalConfigFileName sits beside ProjectConfigFileName and is merged LAST
+	// by Initialize, so it overrides the tracked file. It is the documented
+	// place for machine-specific settings that must not be committed
+	// (docs/reference/configuration.md). Named here so Initialize's own local
+	// merge (in the file-loading block at the end of Initialize) and the
+	// workspace-scoped reader in WorkspaceYamlValueStrictWithLocal cannot
+	// drift onto different files. ProjectConfigFileName binds the two
+	// workspace-scoped strict readers to each other; Initialize still spells
+	// config.yaml literally in the several places it probes for one.
+	LocalConfigFileName = "config.local.yaml"
 )
 
 var v *viper.Viper
@@ -124,10 +140,12 @@ func Initialize() error {
 
 	cwd, err := os.Getwd()
 	if err == nil {
+		// BEADS_CEILING_DIRECTORIES bounds both upward walks below.
+		bound := ceiling.For(cwd)
 		var moduleRoot string
 		if ignoreRepoConfig {
 			// Find module root by walking up to go.mod.
-			for dir := cwd; dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+			for dir := cwd; dir != filepath.Dir(dir) && !bound.Excludes(dir); dir = filepath.Dir(dir) {
 				if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
 					moduleRoot = dir
 					break
@@ -157,7 +175,7 @@ func Initialize() error {
 		}
 
 		// Walk up parent directories to find .beads/config.yaml.
-		for dir := cwd; dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+		for dir := cwd; dir != filepath.Dir(dir) && !bound.Excludes(dir); dir = filepath.Dir(dir) {
 			p := filepath.Join(dir, ".beads", "config.yaml")
 			if _, err := os.Stat(p); err == nil {
 				// When BEADS_DIR points at a different runtime workspace, do not
@@ -260,12 +278,6 @@ func Initialize() error {
 	// Controls whether beads should automatically create Dolt commits after write commands.
 	// Values: off | on
 	v.SetDefault("dolt.auto-commit", "on")
-
-	// Gas City lifecycle commands printed when the city owns a store's Dolt
-	// server (see gascity.go).
-	for key, command := range gasCityCommandDefaults {
-		v.SetDefault(key, command)
-	}
 
 	// Routing configuration defaults
 	v.SetDefault("routing.mode", "")
@@ -384,7 +396,7 @@ func Initialize() error {
 
 		// Merge local config overrides if present (config.local.yaml)
 		// This allows machine-specific settings without polluting tracked config
-		localConfigPath := filepath.Join(filepath.Dir(primaryConfigPath), "config.local.yaml")
+		localConfigPath := filepath.Join(filepath.Dir(primaryConfigPath), LocalConfigFileName)
 		if _, err := os.Stat(localConfigPath); err == nil {
 			v.SetConfigFile(localConfigPath)
 			if err := v.MergeInConfig(); err != nil {
@@ -425,6 +437,17 @@ func worktreeFallbackConfigPath(repoPath string) string {
 
 func gitDirsForRepo(repoPath string) (gitDir, commonDir string, ok bool) {
 	cmd := exec.Command("git", "-C", repoPath, "rev-parse", "--git-dir", "--git-common-dir")
+	// repoPath is the authority for this probe. Inherited Git routing such as
+	// GIT_DIR overrides -C and can make startup read another repository's
+	// shared-worktree config before command dispatch has begun. Scrubbing also
+	// drops an inherited GIT_CEILING_DIRECTORIES, which widens rather than
+	// narrows discovery: -C repoPath fixes where the search starts, not where it
+	// stops, so dropping discovery ceilings can select a containing parent
+	// repository above repoPath. That is the intended trade, and it applies here
+	// too -- repoPath is the process working directory, not a proven repository
+	// root. An explicit BEADS_CEILING_DIRECTORIES is the exception: it is
+	// reapplied as the git ceiling (a no-op when unset).
+	cmd.Env = ceiling.GitEnv(gitenv.ScrubRouting(os.Environ()))
 	output, err := cmd.Output()
 	if err != nil {
 		return "", "", false
@@ -695,75 +718,51 @@ func GetString(key string) string {
 // This is intended for library consumers that call NewFromConfigWithOptions
 // without first invoking config.Initialize().
 //
-// The key uses dotted notation (e.g. "dolt.auto-start"); see
-// LookupStringFromDir for the accepted YAML shapes. YAML booleans and numbers
-// are coerced to their string representations ("true", "false", etc.).
-// Returns "" if the file is absent, the key is not found, or any error occurs;
-// callers whose decision must not treat a broken file as an absent key use
-// LookupStringFromDir instead.
+// The key uses dotted notation (e.g. "dolt.auto-start"). YAML booleans and
+// numbers are coerced to their string representations ("true", "false", etc.).
+// Returns "" if the file is absent, the key is not found, or any error occurs.
 func GetStringFromDir(beadsDir, key string) string {
-	value, _, err := LookupStringFromDir(beadsDir, key)
-	if err != nil {
-		return ""
-	}
-	return value
-}
-
-// LookupStringFromDir reads a single scalar configuration value directly from
-// <beadsDir>/config.yaml without using or modifying global viper state.
-//
-// Like viper, the lookup accepts both a nested mapping
-// (`dolt: {auto-start: false}`) and a flat dotted key
-// (`gc.endpoint_origin: inherited_city`, the form Gas City stamps): at every
-// level the longest remaining key is tried verbatim before descending one
-// segment. YAML booleans and numbers are coerced to their string
-// representations; an explicit YAML null is a present, empty value.
-//
-// found is false with a nil error only when the file does not exist or the key
-// is absent. Any other read failure, malformed YAML, or a key whose path runs
-// through or ends at a non-scalar node is returned as an error.
-func LookupStringFromDir(beadsDir, key string) (value string, found bool, err error) {
 	configPath := filepath.Join(beadsDir, "config.yaml")
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return "", false, nil
-		}
-		return "", false, fmt.Errorf("reading %s: %w", configPath, err)
+		return ""
 	}
 	var root map[string]interface{}
 	if err := yaml.Unmarshal(data, &root); err != nil {
-		return "", false, fmt.Errorf("parsing %s: %w", configPath, err)
+		return ""
 	}
+	// Match Viper's precedence: an exact top-level key wins over dotted-path
+	// descent when a file contains both spellings.
+	if val, ok := root[key]; ok {
+		return configValueString(val)
+	}
+	parts := strings.SplitN(key, ".", 2)
 	node := root
-	rest := key
-	for {
-		if val, ok := node[rest]; ok {
-			switch s := val.(type) {
-			case nil:
-				return "", true, nil
-			case string:
-				return s, true, nil
-			case map[string]interface{}, []interface{}:
-				return "", false, fmt.Errorf("%s in %s is not a scalar value", key, configPath)
-			default:
-				return fmt.Sprintf("%v", s), true, nil
-			}
-		}
-		head, tail, cut := strings.Cut(rest, ".")
-		if !cut {
-			return "", false, nil
-		}
-		next, ok := node[head]
+	for len(parts) == 2 {
+		val, ok := node[parts[0]]
 		if !ok {
-			return "", false, nil
+			return ""
 		}
-		m, ok := next.(map[string]interface{})
+		m, ok := val.(map[string]interface{})
 		if !ok {
-			return "", false, fmt.Errorf("%s in %s: %q is not a mapping", key, configPath, head)
+			return ""
 		}
 		node = m
-		rest = tail
+		parts = strings.SplitN(parts[1], ".", 2)
+	}
+	val, ok := node[parts[0]]
+	if !ok {
+		return ""
+	}
+	return configValueString(val)
+}
+
+func configValueString(val interface{}) string {
+	switch s := val.(type) {
+	case string:
+		return s
+	default:
+		return fmt.Sprintf("%v", s)
 	}
 }
 
@@ -1042,7 +1041,9 @@ func ResolveExternalProjectPath(projectName string) string {
 //  3. git config user.name
 //  4. hostname
 //
-// This is used as the sender field in bd mail commands.
+// The Git lookup discards custom GIT_CONFIG_GLOBAL paths and other routing
+// overrides, while retaining explicit config suppression. Set user.name in
+// the default global config location when global config is enabled.
 func GetIdentity(flagValue string) string {
 	// 1. Command-line flag takes precedence
 	if flagValue != "" {
@@ -1056,6 +1057,7 @@ func GetIdentity(flagValue string) string {
 
 	// 3. git config user.name
 	cmd := exec.Command("git", "config", "user.name")
+	cmd.Env = gitenv.ScrubRouting(os.Environ())
 	if output, err := cmd.Output(); err == nil {
 		if gitUser := strings.TrimSpace(string(output)); gitUser != "" {
 			return gitUser

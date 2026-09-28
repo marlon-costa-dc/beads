@@ -51,16 +51,9 @@ rm -rf -- "$beads_manual_dir"
 `BEADS_DB` alone does not redirect `bd init` workspace setup. Do not run manual
 initialization from a production workspace even when selecting another database.
 
-**For automated tests**, use `t.TempDir()` in Go tests:
-
-```go
-func TestMyFeature(t *testing.T) {
-    tmpDir := t.TempDir()
-    testDB := filepath.Join(tmpDir, ".beads", "beads.db")
-    s := newTestStore(t, testDB)
-    // ... test code
-}
-```
+**For automated tests**, use `t.TempDir()` and the real storage fixture owned by
+the package under test. Keep the fixture in that temporary root and register
+its cleanup with `t.Cleanup()`.
 
 **Git test isolation:** For tests that create temporary git repos, force repo-local hooks:
 

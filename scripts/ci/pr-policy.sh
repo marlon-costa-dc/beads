@@ -46,7 +46,7 @@ check_no_beads_jsonl_changes() {
         return 0
     fi
 
-    if git diff --name-only "$base_ref"...HEAD | grep -q '^\.beads/issues\.jsonl$'; then
+    if git diff --no-renames --name-only "$base_ref"...HEAD | grep -q '^\.beads/issues\.jsonl$'; then
         cat >&2 <<'EOF'
 This change includes .beads/issues.jsonl.
 

@@ -61,6 +61,62 @@ func TestPRCIGateRequiresPolicyAndLintWrappers(t *testing.T) {
 	}
 }
 
+func TestPRCoreRequiresExcludeReadPermissionCoverage(t *testing.T) {
+	workflow := readCIWorkflow(t, "pr.yml")
+	job := workflow.job(t, "pr-core-wrapper")
+	if job.RunsOn != "ubuntu-latest" || job.If != "" || job.ContinueOnError {
+		t.Error("exclude permission coverage must remain in the required Linux PR Core job")
+	}
+	step := job.Steps[job.stepIndex(t, "Run PR core wrapper")]
+	if step.If != "" || (step.ContinueOnError != nil && step.ContinueOnError != false) || strings.TrimSpace(step.Run) != "make ci-pr-core" {
+		t.Error("exclude permission coverage must run through the nonoptional PR Core wrapper")
+	}
+	if step.Env["BEADS_TEST_REQUIRE_EXCLUDE_PERMISSION"] != "1" {
+		t.Error("PR Core must require actual exclude read-permission coverage")
+	}
+	gate := workflow.job(t, "ci-gate")
+	evaluate := gate.step(t, "Evaluate CI gate")
+	if gate.If != "${{ always() }}" || gate.ContinueOnError || evaluate.If != "" || (evaluate.ContinueOnError != nil && evaluate.ContinueOnError != false) {
+		t.Error("CI gate must propagate required PR Core failures")
+	}
+	if !contains(gate.Needs, "pr-core-wrapper") || evaluate.Env["PR_CORE_WRAPPER"] != "${{ needs.pr-core-wrapper.result }}" || !contains(strings.Fields(evaluate.Env["CI_GATE_REQUIRED"]), "PR_CORE_WRAPPER") {
+		t.Error("CI gate must require the PR Core result")
+	}
+}
+
+func TestPRComplexityReportIsAdvisoryAndBestEffort(t *testing.T) {
+	workflow := readCIWorkflow(t, "pr.yml")
+	job := workflow.job(t, "complexity-report")
+	if job.RunsOn != "ubuntu-latest" || job.TimeoutMinutes != 0 || job.ContinueOnError {
+		t.Errorf("complexity job must have no job timeout/continue-on-error: runs-on=%q timeout=%d continue=%v", job.RunsOn, job.TimeoutMinutes, job.ContinueOnError)
+	}
+	if contains(job.Needs, "ci-gate") {
+		t.Errorf("complexity report unexpectedly depends on ci-gate: %v", job.Needs)
+	}
+	for _, name := range []string{"Set up Go", "Install gocyclo", "Generate complexity report", "Annotate unavailable complexity report", "Upload complexity report"} {
+		step := job.step(t, name)
+		if step.TimeoutMinutes <= 0 || step.ContinueOnError != true {
+			t.Errorf("complexity step %q is not bounded/best-effort: timeout=%d continue=%v", name, step.TimeoutMinutes, step.ContinueOnError)
+		}
+	}
+	checkout := job.Steps[0]
+	if checkout.TimeoutMinutes <= 0 || checkout.ContinueOnError != true {
+		t.Errorf("complexity checkout is not bounded/best-effort: timeout=%d continue=%v", checkout.TimeoutMinutes, checkout.ContinueOnError)
+	}
+	report := job.step(t, "Generate complexity report")
+	if report.ID != "generate-complexity" || report.If != "always()" || !strings.Contains(report.Run, "complexity.sh diff") || !strings.Contains(report.Run, "COMPLEXITY_BASE_REF=origin/main") {
+		t.Errorf("complexity report step missing diff/always contract: id=%q if=%q run=%q", report.ID, report.If, report.Run)
+	}
+	annotate := job.step(t, "Annotate unavailable complexity report")
+	if annotate.If != "always()" || !strings.Contains(annotate.Run, "::warning") {
+		t.Errorf("complexity annotation step missing always/warning contract: if=%q run=%q", annotate.If, annotate.Run)
+	}
+	gate := workflow.job(t, "ci-gate")
+	if contains(gate.Needs, "complexity-report") {
+		t.Errorf("ci-gate must not require advisory complexity report: %v", gate.Needs)
+	}
+}
+
 func TestPRWorkflowExercisesWindowsBenchmarkEnvScrubbing(t *testing.T) {
 	workflow := readCIWorkflow(t, "pr.yml")
 	job := workflow.job(t, "pr-preflight-platforms")
@@ -106,6 +162,22 @@ func TestPRWorkflowExercisesWindowsBenchmarkEnvScrubbing(t *testing.T) {
 	}
 	if !contains(strings.Fields(gateEnv["CI_GATE_REQUIRED"]), "PR_PREFLIGHT_PLATFORMS") {
 		t.Error("ci-gate required set omits pr-preflight-platforms")
+	}
+}
+
+func TestPRWorkflowExercisesWindowsEnvironmentHelpers(t *testing.T) {
+	workflow := readCIWorkflow(t, "pr.yml")
+	// The benchmark test owns this shared job's matrix and CI Gate propagation.
+	job := workflow.job(t, "pr-preflight-platforms")
+	step := job.step(t, "Check shared environment key semantics")
+	if step.If != "matrix.os == 'windows-latest'" || step.Shell != "bash" {
+		t.Errorf("environment helpers need native Windows Bash: if=%q shell=%q", step.If, step.Shell)
+	}
+	if step.ContinueOnError != nil && step.ContinueOnError != false {
+		t.Error("environment helper step may not continue on error")
+	}
+	if got := strings.TrimSpace(step.Run); got != "bash scripts/ci/test-windows-env-helpers.sh" {
+		t.Errorf("environment helper entrypoint = %q", got)
 	}
 }
 
@@ -216,17 +288,13 @@ func TestPRCIGateRequiresGeneratedHookTimeoutProcessBoundary(t *testing.T) {
 
 func TestStorageDomainUOWJobsUseNestedTimeoutBudgets(t *testing.T) {
 	const (
-		storageTimeoutMinutes     = 15
+		storageTimeoutMinutes     = 30
 		doctorTimeoutMinutes      = 10
 		setupTeardownSlackMinutes = 5
 		jobTimeoutMinutes         = storageTimeoutMinutes + doctorTimeoutMinutes + setupTeardownSlackMinutes
 	)
-	storageCommand := fmt.Sprintf(
-		"go test -tags gms_pure_go -race -count=1 -timeout %dm -v ./internal/storage/domain/... ./internal/storage/uow/... ./internal/tracker/...",
-		storageTimeoutMinutes)
-	doctorCommand := fmt.Sprintf(
-		"go test -tags gms_pure_go -race -count=1 -timeout %dm -v ./cmd/bd/doctor/fix/",
-		doctorTimeoutMinutes)
+	const storageCommand = "make ci-pr-storage"
+	const doctorCommand = "make ci-pr-doctor-fix"
 
 	for _, workflowName := range []string{"pr.yml", "main.yml"} {
 		t.Run(workflowName, func(t *testing.T) {
@@ -266,11 +334,17 @@ func TestMacOSTestJobsReuseWorkspaceBDBinary(t *testing.T) {
 		workspaceBDBinary = "${{ github.workspace }}/bd"
 		buildCommand      = "go build -v -tags gms_pure_go ./cmd/bd"
 		// -timeout=30m is pinned on both lanes because ./cmd/bd has outgrown
-		// `go test`'s 10m per-package default (#6091). In main.yml it sits on
+		// `go test`'s 10m per-package default (#6091, and wy-5b5fbl before it —
+		// that default is what made these legs flaky). In main.yml it sits on
 		// the invocation rather than in matrix.test-flags, so editing the
-		// matrix cannot silently drop it.
+		// matrix cannot silently drop it, and so the macOS leg cannot drift
+		// away from the ubuntu -race lanes' deadline.
 		prTestCommand   = "go test -tags gms_pure_go -v -race -short -timeout=30m -skip '^TestEmbedded' ./..."
 		mainTestCommand = "go test -tags gms_pure_go ${{ matrix.test-flags }} -timeout=30m -skip '^TestEmbedded' ./..."
+		// The macOS leg is the only consumer of main.yml's matrix test-flags
+		// (the ubuntu leg's coverage step hardcodes its own). The deadline is
+		// deliberately NOT here — see mainTestCommand.
+		mainMacOSTestFlags = "-v -race -short"
 	)
 
 	workflows := map[string]ciWorkflow{
@@ -302,8 +376,8 @@ func TestMacOSTestJobsReuseWorkspaceBDBinary(t *testing.T) {
 	}
 	if got := mainTest.Strategy.Matrix.Include; len(got) != 2 ||
 		got[0].OS != "ubuntu-latest" || !got[0].Coverage ||
-		got[1].OS != macOSRunner || got[1].Coverage || got[1].TestFlags != "-v -race -short" {
-		t.Errorf("main test matrix include = %+v, want macOS non-coverage entry with -v -race -short", got)
+		got[1].OS != macOSRunner || got[1].Coverage || got[1].TestFlags != mainMacOSTestFlags {
+		t.Errorf("main test matrix include = %+v, want macOS non-coverage entry with %s", got, mainMacOSTestFlags)
 	}
 	assertStepEnvValue(t, mainTest, "Test", "BEADS_TEST_BD_BINARY", workspaceBDBinary)
 
@@ -1263,8 +1337,9 @@ func TestWorkflowsInstallPinnedDolt(t *testing.T) {
 	}
 }
 
-// TestPinnedDoltCLIMatchesContainerImage keeps the CLI pin and the sql-server
-// container pin on the same Dolt release. Server-mode tests run both at once
+// TestPinnedDoltCLIMatchesContainerImage keeps the CLI pin, the sql-server
+// container pin and the hermetic Bazel dolt (tools/bazel/dolt.bzl) on the same
+// Dolt release. Server-mode tests run both at once
 // against the same databases; a drifting pair tests a combination no release
 // ever shipped.
 func TestPinnedDoltCLIMatchesContainerImage(t *testing.T) {
@@ -1288,9 +1363,41 @@ func TestPinnedDoltCLIMatchesContainerImage(t *testing.T) {
 	}
 	pullVersion := captureOne(t, `dolthub/dolt-sql-server:([0-9]+\.[0-9]+\.[0-9]+)`, string(pullScript), "scripts/ci/pull-dolt-image.sh")
 
-	if cliVersion != imageVersion || cliVersion != pullVersion {
-		t.Errorf("dolt pins disagree: CLI %s, DoltDockerImage %s, pull-dolt-image.sh %s",
-			cliVersion, imageVersion, pullVersion)
+	bazelRule, err := os.ReadFile(filepath.Join(root, "tools", "bazel", "dolt.bzl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bazelVersion := captureOne(t, `(?m)^DOLT_VERSION = "([0-9]+\.[0-9]+\.[0-9]+)"$`, string(bazelRule), "tools/bazel/dolt.bzl:DOLT_VERSION")
+
+	if cliVersion != imageVersion || cliVersion != pullVersion || cliVersion != bazelVersion {
+		t.Errorf("dolt pins disagree: CLI %s, DoltDockerImage %s, pull-dolt-image.sh %s, tools/bazel/dolt.bzl %s",
+			cliVersion, imageVersion, pullVersion, bazelVersion)
+	}
+}
+
+// TestProxiedLocalSmokeMatchesPinnedDoltVersion keeps the proxied-local-smoke
+// lane's standalone Dolt CLI install on the same release as the rest of the
+// suite. That lane downloads its own dolt binary straight from GitHub
+// releases instead of going through scripts/ci/install-dolt.sh, so nothing
+// else catches it drifting off the measured pin (see "Which Dolt version to
+// install" in docs/architecture/dolt.md for why the pin is not just "latest").
+func TestProxiedLocalSmokeMatchesPinnedDoltVersion(t *testing.T) {
+	root := sourceRepoRoot(t)
+
+	installer, err := os.ReadFile(filepath.Join(root, "scripts", "ci", "install-dolt.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cliVersion := captureOne(t, `(?m)^readonly version="([0-9]+\.[0-9]+\.[0-9]+)"$`, string(installer), "scripts/ci/install-dolt.sh")
+
+	workflow, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "proxied-local-smoke.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	smokeVersion := captureOne(t, `(?m)^\s*DOLT_VERSION:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$`, string(workflow), "proxied-local-smoke.yml:DOLT_VERSION")
+
+	if cliVersion != smokeVersion {
+		t.Errorf("dolt pins disagree: CLI %s, proxied-local-smoke.yml DOLT_VERSION %s", cliVersion, smokeVersion)
 	}
 }
 
