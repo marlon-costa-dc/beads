@@ -212,30 +212,39 @@ in
           # `|| rc=$?`: the builder runs under set -e, and a bare assignment
           # from a failing command would end this subshell before it reports.
           rc=0
-          case_out=$(timeout 10 env PATH="$path" BEADS_HOOK_TIMEOUT=1 \
+          case_out=$(timeout -s KILL 10 env PATH="$path" BEADS_HOOK_TIMEOUT=1 \
                   FAKE_BD_BLOCK="$block" FAKE_BD_SIGNAL="$signal_file" \
                   "$case_dir/bin/sh" "$shims/$hook" origin https://example.invalid 2>&1 <&3) || rc=$?
           signal=$(cat "$signal_file" 2>/dev/null || true)
           verdict=ok
-          if [ "$rc" -eq 124 ]; then
-            # This is the one mode that is intermittent and not reproducible
-            # locally, so it needs the output most: report it like the branch
-            # below rather than as a bare string.
+          if [ "$rc" -eq 137 ]; then
             verdict="FAIL: nothing killed the fake bd (harness safety net fired), signal='$signal': $case_out"
-          elif [ "$rc" -ne 0 ]; then
-            verdict="FAIL: hook exit $rc (would block the push): $case_out"
           else
             case "$backend" in
               coreutils)
-                case "$case_out" in *"timed out after 1s"*) ;; *) verdict="FAIL: no deadline report: $case_out" ;; esac
-                [ "$signal" = TERM ] || verdict="FAIL: expected coreutils timeout (TERM), fake saw '$signal'"
+                if [ "$rc" -ne 124 ]; then
+                  verdict="FAIL: expected raw coreutils timeout exit 124, got $rc: $case_out"
+                elif ! printf '%s\n' "$case_out" | grep -Fq 'timed out after 1s'; then
+                  verdict="FAIL: no deadline report: $case_out"
+                elif [ "$signal" != TERM ]; then
+                  verdict="FAIL: expected coreutils timeout (TERM), fake saw '$signal'"
+                fi
                 ;;
               perl)
-                case "$case_out" in *"timed out after 1s"*) ;; *) verdict="FAIL: no deadline report: $case_out" ;; esac
-                [ "$signal" = ALRM ] || verdict="FAIL: expected perl alarm (ALRM), fake saw '$signal'"
+                if [ "$rc" -ne 142 ]; then
+                  verdict="FAIL: expected raw perl alarm exit 142, got $rc: $case_out"
+                elif ! printf '%s\n' "$case_out" | grep -Fq 'timed out after 1s'; then
+                  verdict="FAIL: no deadline report: $case_out"
+                elif [ "$signal" != ALRM ]; then
+                  verdict="FAIL: expected perl alarm (ALRM), fake saw '$signal'"
+                fi
                 ;;
               none)
-                case "$case_out" in *"running without timeout"*) ;; *) verdict="FAIL: no unbounded warning: $case_out" ;; esac
+                if [ "$rc" -ne 0 ]; then
+                  verdict="FAIL: unexpected raw exit $rc without timeout helper: $case_out"
+                elif ! printf '%s\n' "$case_out" | grep -Fq 'running without timeout'; then
+                  verdict="FAIL: no unbounded warning: $case_out"
+                fi
                 ;;
             esac
           fi

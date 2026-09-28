@@ -2,9 +2,11 @@ package uow
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -26,7 +28,7 @@ func openTestUOWProvider(t *testing.T, bin string) (UnitOfWorkProvider, error) {
 	verifiedShutdownCleanup(t, storeRootDir)
 	cfgPath := writeServerConfig(t, port)
 	logPath := filepath.Join(t.TempDir(), "server.log")
-	return NewDoltServerUOWProvider(
+	provider, err := NewDoltServerUOWProvider(
 		context.Background(),
 		storeRootDir,
 		"beads",
@@ -44,10 +46,36 @@ func openTestUOWProvider(t *testing.T, bin string) (UnitOfWorkProvider, error) {
 	if err != nil {
 		serverLog, readErr := os.ReadFile(logPath)
 		if readErr != nil {
-			t.Fatalf("NewDoltServerUOWProvider: %v; read Dolt server log: %v", err, readErr)
+			return nil, fmt.Errorf("NewDoltServerUOWProvider: %v; read Dolt server log: %w", err, readErr)
 		}
-		t.Fatalf("NewDoltServerUOWProvider: %v; Dolt server log:\n%s", err, serverLog)
+		return nil, fmt.Errorf("NewDoltServerUOWProvider: %v; Dolt server log:\n%s", err, serverLog)
 	}
+	return provider, nil
+}
+
+func localDoltNeverListened(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "exited before listener became ready")
+}
+
+func newTestUOWProvider(t *testing.T) UnitOfWorkProvider {
+	t.Helper()
+	testutil.RequireDoltBinary(t)
+	bin, err := exec.LookPath("dolt")
+	require.NoError(t, err)
+
+	bdBin := buildBDBinary(t)
+	prev := proxy.ResolveExecutable
+	proxy.ResolveExecutable = func() (string, error) { return bdBin, nil }
+	t.Cleanup(func() { proxy.ResolveExecutable = prev })
+	t.Setenv("HOME", t.TempDir())
+
+	provider, err := openTestUOWProvider(t, bin)
+	require.NoError(t, err)
 	require.NotNil(t, provider)
 	t.Cleanup(func() { _ = provider.Close(context.Background()) })
 	return provider
