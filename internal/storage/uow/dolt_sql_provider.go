@@ -3,16 +3,21 @@ package uow
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 
+	"github.com/steveyegge/beads/internal/configfile"
+	"github.com/steveyegge/beads/internal/debug"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/dbproxy/proxy"
 	"github.com/steveyegge/beads/internal/storage/dbproxy/util"
@@ -23,7 +28,7 @@ import (
 
 const (
 	defaultBranch           = "main"
-	defaultProxyIdleTimeout = 30 * time.Second
+	defaultProxyIdleTimeout = configfile.DefaultProxyIdleTimeout
 )
 
 type doltSQLProvider struct {
@@ -52,6 +57,9 @@ type doltSQLProvider struct {
 	// eventsJournalEnabled activates the durable events journal for THIS
 	// provider instance only. See SetEventsJournalEnabled.
 	eventsJournalEnabled atomic.Bool
+	// versionedHistoryEnabled activates dual-write issue-version history for
+	// THIS provider instance only. See SetVersionedHistoryEnabled.
+	versionedHistoryEnabled atomic.Bool
 }
 
 // SetEventsJournalEnabled activates the durable events journal for every unit
@@ -66,6 +74,13 @@ type doltSQLProvider struct {
 // write lands and the journal is simply empty.
 func (p *doltSQLProvider) SetEventsJournalEnabled(enabled bool) {
 	p.eventsJournalEnabled.Store(enabled)
+}
+
+// SetVersionedHistoryEnabled activates dual-write issue-version history for
+// every unit of work this provider begins from now on. Per instance, never
+// process-global — see SetEventsJournalEnabled.
+func (p *doltSQLProvider) SetVersionedHistoryEnabled(enabled bool) {
+	p.versionedHistoryEnabled.Store(enabled)
 }
 
 type bootstrapPreparationError struct {
@@ -142,9 +157,10 @@ func applyProviderOptions(opts []ProviderOption) providerOptions {
 }
 
 var (
-	_ UnitOfWorkProvider              = (*doltSQLProvider)(nil)
-	_ TxProvider                      = (*doltSQLProvider)(nil)
-	_ storage.EventsJournalConfigurer = (*doltSQLProvider)(nil)
+	_ UnitOfWorkProvider                 = (*doltSQLProvider)(nil)
+	_ TxProvider                         = (*doltSQLProvider)(nil)
+	_ storage.EventsJournalConfigurer    = (*doltSQLProvider)(nil)
+	_ storage.VersionedHistoryConfigurer = (*doltSQLProvider)(nil)
 )
 
 func (p *doltSQLProvider) NewUOW(ctx context.Context) (UnitOfWork, error) {
@@ -172,22 +188,28 @@ func (p *doltSQLProvider) BeginTx(ctx context.Context) (Tx, error) {
 		return nil, fmt.Errorf("uow: failed to start transaction: %w", err)
 	}
 
-	// Bind journal activation to the connection this unit of work is pinned to,
-	// AFTER START TRANSACTION so the seq allocation's UPDATE and the SELECT that
-	// must observe it are inside one transaction on one session. The scope is
-	// released when the connection is (doltServerTx.releaseConn / poisonConn),
-	// so an entry cannot outlive its transaction.
+	// Bind journal and versioned-history activation to the connection this unit
+	// of work is pinned to, AFTER START TRANSACTION so the seq allocation's
+	// UPDATE and the SELECT that must observe it are inside one transaction on
+	// one session. Both scopes are released when the connection is
+	// (doltServerTx.releaseConn / poisonConn), so an entry cannot outlive its
+	// transaction.
 	return &doltServerTx{
 		conn:              conn,
 		clearJournalScope: issueops.ScopeEventsJournalTransaction(conn, p.eventsJournalEnabled.Load()),
+		clearVersionScope: issueops.ScopeVersionedHistoryTransaction(conn, p.versionedHistoryEnabled.Load()),
 	}, nil
 }
 
 // selectProbeDatabase lets schema's pre-lock convergence probe reach the
-// database on a session that is not yet on one. openAndInitSchema pins its
-// schema-init pool with an EMPTY DSN database, so without this the probe reads
-// NULL from DATABASE(), declines, and every invocation queues on the
-// server-wide migration lock it exists to skip.
+// database on a session that is not yet on one. openAndInitSchema has two entry
+// shapes since wy-s8ytnw, and only one of them needs this: the steady-state
+// open connects straight to the target database, so the probe reads it from
+// DATABASE() and returns before consulting the selector at all
+// (schema.selectTargetDatabase). The fall-through open still pins its
+// schema-init pool with an EMPTY DSN database, and there, without this, the
+// probe reads NULL from DATABASE(), declines, and every invocation queues on
+// the server-wide migration lock it exists to skip.
 //
 // The USE MUST remain the DDL repository's own UseDatabase — the exact
 // statement prepareBootstrap issues below. That identity is the reason the
@@ -216,9 +238,9 @@ func selectProbeDatabase(ctx context.Context, conn schema.DBConn, database strin
 func (p *doltSQLProvider) initSchema(ctx context.Context, database string) error {
 	bo := backoff.NewExponentialBackOff()
 	bo.InitialInterval = 25 * time.Millisecond
-	// This budget must outwait a peer holding the migration lock through a
-	// full cold-start migration pass (every migration + a Dolt commit each),
-	// not just a transient blip — it grows as migrations accumulate.
+	// This bounds serialization retries. A peer's cold-start migration is
+	// awaited by schema.AcquireMigrationLock on its pinned SQL session; that
+	// single wait owns lock contention and may outlast this retry budget.
 	bo.MaxElapsedTime = 60 * time.Second
 	// One preparer per initSchema call carries the sticky fresh-bootstrap state
 	// (created/heal) across every backoff attempt; see bootstrapPreparer.
@@ -559,6 +581,91 @@ func buildDSN(ep proxy.Endpoint, database, user, password, tlsConfigName string)
 	}.String()
 }
 
+// pinger is the subset of *sql.DB that pingWithRetry needs, narrowed so
+// tests can script a sequence of transient failures without a real
+// connection.
+type pinger interface {
+	PingContext(ctx context.Context) error
+}
+
+// pingAttemptTimeout bounds a single ping attempt. The DSN sets a dial
+// Timeout (5s, internal/storage/dbproxy/util/dsn.go) but no ReadTimeout, so a
+// server that accepts the TCP connection and then stalls mid-handshake is
+// otherwise bounded only by the caller's context. Kept above the dial timeout
+// so a genuine dial timeout still surfaces as itself instead of being masked
+// by this cap.
+const pingAttemptTimeout = 10 * time.Second
+
+// isTransientPingError reports whether err is a connection-level failure worth
+// retrying — the shapes a Dolt server produces when it drops or stalls a
+// connection mid-handshake or mid-ping — as opposed to a durable rejection
+// (bad credentials, unknown database) that retrying cannot fix.
+//
+// Any *net.OpError counts. Before the handshake completes there is no
+// application-level rejection that can reach us as one, so at boot an OpError
+// is always the connection itself: refused while the server restarts, reset,
+// or broken pipe. MySQL's own rejections arrive as *mysql.MySQLError and stay
+// permanent. A name that does not resolve is the exception — it will not start
+// resolving, so retrying only spends the whole budget before reporting the
+// same misconfiguration.
+//
+// context.DeadlineExceeded counts only because pingWithRetry applies a
+// per-attempt deadline and checks the caller's context *before* consulting
+// this function, so a DeadlineExceeded that reaches here can only be that
+// per-attempt cap. Do not call this without that guard: classifying the
+// caller's own expiry as transient would retry a context that is already dead,
+// which is the regression #6000 introduced from the other direction.
+//
+// Deliberately narrower than internal/storage/dolt's isRetryableError, which
+// covers this same ground for query-time retries in server mode. That one
+// matches on error text and additionally admits migration-lock, Dolt
+// read-only, and MySQL-1105 shapes — server states that describe a *statement*
+// being refused, which a boot ping cannot be in because nothing has executed on
+// the connection yet. Matching sentinels and types with errors.Is/errors.As
+// keeps this side typed, and keeps a bootstrap ping from inheriting retry
+// semantics that only make sense mid-transaction.
+func isTransientPingError(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && !dnsErr.IsTemporary && !dnsErr.IsTimeout {
+		return false
+	}
+	var opErr *net.OpError
+	return errors.Is(err, driver.ErrBadConn) ||
+		errors.Is(err, mysql.ErrInvalidConn) ||
+		errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.As(err, &opErr)
+}
+
+// pingWithRetry pings until the server answers, the error proves durable, or
+// bo's MaxElapsedTime is spent. Each attempt gets its own deadline:
+// backoff.Retry bounds the gap between attempts but cannot interrupt one
+// already in flight, so without this cap a server that accepts TCP and then
+// stalls blocks for the caller's entire context.
+func pingWithRetry(ctx context.Context, p pinger, bo *backoff.ExponentialBackOff, attemptTimeout time.Duration) error {
+	return backoff.Retry(func() error {
+		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
+		defer cancel()
+
+		err := p.PingContext(attemptCtx)
+		if err == nil {
+			return nil
+		}
+		// The caller's context is spent, so nothing further can succeed and
+		// its Canceled/DeadlineExceeded must not be read as a transient
+		// per-attempt timeout. This check is what lets isTransientPingError
+		// treat DeadlineExceeded as retryable at all.
+		if ctx.Err() != nil {
+			return backoff.Permanent(err)
+		}
+		if isTransientPingError(err) {
+			return err
+		}
+		return backoff.Permanent(err)
+	}, backoff.WithContext(bo, ctx))
+}
+
 // assertSessionDatabaseOnPool runs assertSessionDatabase on a connection pinned
 // out of pool. A pool hands out a different connection per call, so the
 // assertion has to name the connection it is asserting about.
@@ -571,32 +678,132 @@ func assertSessionDatabaseOnPool(ctx context.Context, pool *sql.DB, want string)
 	return assertSessionDatabase(ctx, conn, want)
 }
 
+// openDB opens dsn and waits out a server that is still coming up, retrying
+// transient ping failures for up to 30s (#6003).
 func openDB(ctx context.Context, dsn string) (*sql.DB, error) {
+	bo := backoff.NewExponentialBackOff()
+	bo.MaxElapsedTime = 30 * time.Second
+	return openPool(dsn, func(conn *sql.DB) error {
+		return pingWithRetry(ctx, conn, bo, pingAttemptTimeout)
+	})
+}
+
+// openDBProbe opens dsn and proves it with ONE bounded ping instead of
+// openDB's 30s retry budget. It exists for openAndInitSchema's fast path,
+// whose failure is not terminal: every error there falls through to the
+// historical open, which keeps the retry budget it has always owned. Retrying
+// here as well would charge an unreachable server twice — this budget and then
+// the fall-through's, ~60s where the pre-fast-path code spent 30s — to answer
+// a question one ping answers. The sibling fast path in internal/storage/dolt
+// (openServerConnection's bare PingContext ahead of its no-database init
+// connection) is deliberately the same shape.
+//
+// The one attempt is still capped at pingAttemptTimeout, for the reason
+// pingWithRetry caps its own attempts: the DSN sets no ReadTimeout, so a server
+// that accepts TCP and then stalls mid-handshake is otherwise bounded only by
+// the caller's context.
+func openDBProbe(ctx context.Context, dsn string) (*sql.DB, error) {
+	return openPool(dsn, func(conn *sql.DB) error {
+		pingCtx, cancel := context.WithTimeout(ctx, pingAttemptTimeout)
+		defer cancel()
+		return conn.PingContext(pingCtx)
+	})
+}
+
+// openPool opens dsn and hands the pool to prove, which must establish that
+// the server answers on it. The error texts are load-bearing — callers match
+// on "uow: open db" and "uow: ping db" — and a pool whose prove fails is
+// closed here rather than leaked to a caller that only sees an error.
+func openPool(dsn string, prove func(*sql.DB) error) (*sql.DB, error) {
 	conn, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("uow: open db: %w", err)
 	}
-	if err := conn.PingContext(ctx); err != nil {
+	if err := prove(conn); err != nil {
 		return nil, errors.Join(fmt.Errorf("uow: ping db: %w", err), conn.Close())
 	}
 	return conn, nil
 }
 
 func openAndInitSchema(ctx context.Context, ep proxy.Endpoint, database, rootUser, rootPassword, tlsConfigName string, teamServer bool, expectedProjectID string, opts providerOptions) (UnitOfWorkProvider, error) {
+	newProvider := func(pool *sql.DB) *doltSQLProvider {
+		return &doltSQLProvider{
+			defaultBranch:     defaultBranch,
+			db:                pool,
+			serverEndpoint:    "tcp:" + ep.Address(),
+			teamServer:        teamServer,
+			expectedProjectID: expectedProjectID,
+			preview:           opts.preview,
+			readOnly:          opts.readOnly,
+		}
+	}
+
+	// Fast path (wy-s8ytnw): connect straight to the target database. A
+	// successful connect IS the existence proof (the same reasoning the
+	// dolt store applies to Gateway servers), so the steady-state open —
+	// a database that already exists, which is every open but the very
+	// first — costs ONE MySQL session instead of two: initSchema runs on
+	// this pool (USE + the converged-schema reads, or a real migration
+	// when one is pending; the bare CREATE DATABASE inside the locked
+	// preparation is refused with 1007 exactly as it is on a no-database
+	// connection, so `created` stays false and fresh-bootstrap heal can
+	// never be armed by a database this call did not create), and the
+	// same pool is then handed to the provider.
+	//
+	// Reusing the migrating pool is safe — but NOT because migrations leave
+	// the session alone. They do not: six shipped migrations issue
+	// `SET FOREIGN_KEY_CHECKS = 0` and restore `= 1` (0041, 0043, 0047,
+	// 0050, 0053, 0058 under internal/storage/schema/migrations), and the
+	// guarded ones leave user variables (`SET @sql`, `SET @needs_add`) set.
+	// It is safe because of three narrower facts:
+	//   - initSchemaAttempt pins ONE session per attempt (p.db.Conn), so a
+	//     script's SET and its restoring SET cannot land on different
+	//     sessions;
+	//   - every script that clears FOREIGN_KEY_CHECKS restores it before it
+	//     can report success, and a leftover user variable is inert: nothing
+	//     outside these scripts reads one, and each script assigns before it
+	//     reads;
+	//   - every initSchema failure below closes this whole pool, so a script
+	//     that died between the two SETs never hands its session back.
+	// That is a convention where it used to be structural: before this fast
+	// path the schema-init pool was always discarded, so a migration could
+	// leak session state with impunity. Now a migration that leaves a system
+	// session variable changed on the success path would leak it into live
+	// query sessions — and an attempt that dies mid-script returns its
+	// connection to the pool, so the restore has to be part of the script,
+	// not of the caller. See internal/storage/schema/migrations/README.md.
+	//
+	// Any connect failure — the database does not exist yet (1049), the
+	// server is down, bad credentials — falls through to the historical
+	// no-database init connection, which owns creation, the ownership
+	// signal, and every error message callers already match on. The probe is
+	// single-shot (openDBProbe) precisely so that fall-through cannot cost a
+	// second full retry budget.
+	probeConn, probeErr := openDBProbe(ctx, buildDSN(ep, database, rootUser, rootPassword, tlsConfigName))
+	if probeErr == nil {
+		provider := newProvider(probeConn)
+		if err := provider.initSchema(ctx, database); err != nil {
+			_ = probeConn.Close()
+			return nil, fmt.Errorf("uow: init schema: %w", err)
+		}
+		return provider, nil
+	}
+
+	// Advisory only: the fall-through below is the historical open, so this is
+	// never fatal. But a silently discarded error is a fast path that has
+	// quietly stopped firing — here that means every bd invocation is back to
+	// burning two MySQL sessions, the exact cost this path exists to remove,
+	// with nothing to say so. Same reasoning as the convergence probe in
+	// internal/storage/schema/lock.go.
+	debug.Logf("uow: single-session open unavailable for %q, using the no-database init connection: %v\n",
+		database, probeErr)
+
 	initDB, err := openDB(ctx, buildDSN(ep, "", rootUser, rootPassword, tlsConfigName))
 	if err != nil {
 		return nil, err
 	}
 
-	initProvider := &doltSQLProvider{
-		defaultBranch:     defaultBranch,
-		db:                initDB,
-		serverEndpoint:    "tcp:" + ep.Address(),
-		teamServer:        teamServer,
-		expectedProjectID: expectedProjectID,
-		preview:           opts.preview,
-		readOnly:          opts.readOnly,
-	}
+	initProvider := newProvider(initDB)
 
 	if err := initProvider.initSchema(ctx, database); err != nil {
 		_ = initDB.Close()
@@ -621,13 +828,5 @@ func openAndInitSchema(ctx context.Context, ep proxy.Endpoint, database, rootUse
 		return nil, errors.Join(err, dbConn.Close())
 	}
 
-	return &doltSQLProvider{
-		defaultBranch:     defaultBranch,
-		db:                dbConn,
-		serverEndpoint:    "tcp:" + ep.Address(),
-		teamServer:        teamServer,
-		expectedProjectID: expectedProjectID,
-		preview:           opts.preview,
-		readOnly:          opts.readOnly,
-	}, nil
+	return newProvider(dbConn), nil
 }

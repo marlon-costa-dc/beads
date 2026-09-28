@@ -189,24 +189,25 @@ func TestRecordingDependencyUseCaseCoversItsSurface(t *testing.T) {
 			// — an ancestry walk and a reachability walk — so there is nothing
 			// for the recorder to notify about; the writes those gates guard are
 			// recorded by AddDependencies, which is declared below.
-			"ValidateBlockingHierarchy": reads,
-			"CycleThroughEdges":         reads,
-			"DetectCycleReport":         reads,
-			"DetectCycles":              reads,
-			"GetBlockingInfo":           reads,
-			"GetDependencyTree":         reads,
-			"GetForIssueIDs":            reads,
-			"GetIssueDependencyRecords": reads,
-			"GetWispDependencyRecords":  reads,
-			"IsBlocked":                 reads,
-			"IsWispBlocked":             reads,
-			"IterWispWithIssueMetadata": reads,
-			"IterWithIssueMetadata":     reads,
-			"ListByIssueIDs":            reads,
-			"ListByWispIDs":             reads,
-			"ListWispWithIssueMetadata": reads,
-			"ListWithIssueMetadata":     reads,
-			"WalkDependencyTree":        reads,
+			"ValidateBlockingHierarchy":            reads,
+			"CycleThroughEdges":                    reads,
+			"DetectCycleReport":                    reads,
+			"DetectCycles":                         reads,
+			"GetBlockingInfo":                      reads,
+			"GetDependencyTree":                    reads,
+			"GetExternalBlockingDependencyRecords": reads,
+			"GetForIssueIDs":                       reads,
+			"GetIssueDependencyRecords":            reads,
+			"GetWispDependencyRecords":             reads,
+			"IsBlocked":                            reads,
+			"IsWispBlocked":                        reads,
+			"IterWispWithIssueMetadata":            reads,
+			"IterWithIssueMetadata":                reads,
+			"ListByIssueIDs":                       reads,
+			"ListByWispIDs":                        reads,
+			"ListWispWithIssueMetadata":            reads,
+			"ListWithIssueMetadata":                reads,
+			"WalkDependencyTree":                   reads,
 		})
 }
 
@@ -293,11 +294,13 @@ func TestNotifyingProviderBuildsRolesOnItself(t *testing.T) {
 		"RunNonTx":      true,
 		"SetPoolLimits": true,
 		"Unwrap":        true,
-		// Events-journal capability plumbing: activation binds on the inner
-		// provider's transactions, and a retention pass writes no bead. Neither
-		// builds a role, so neither can build one "on itself".
-		"SetEventsJournalEnabled": true,
-		"RunEventsMaintenanceTx":  true,
+		// Events-journal and versioned-history capability plumbing: activation
+		// for both binds on the inner provider's transactions, and a retention
+		// pass writes no bead. None of these build a role, so none of them can
+		// build one "on itself".
+		"SetEventsJournalEnabled":    true,
+		"RunEventsMaintenanceTx":     true,
+		"SetVersionedHistoryEnabled": true,
 	}
 
 	var checked int

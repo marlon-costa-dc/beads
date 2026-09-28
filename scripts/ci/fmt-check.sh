@@ -9,7 +9,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
 printf 'Checking Go formatting...\n'
-if UNFORMATTED="$(gofmt -l .)"; then
+GOFMT="$(go env GOROOT)/bin/gofmt"
+if UNFORMATTED="$("$GOFMT" -l .)"; then
     :
 else
     status=$?
