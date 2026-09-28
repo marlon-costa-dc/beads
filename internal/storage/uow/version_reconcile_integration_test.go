@@ -15,28 +15,18 @@ import (
 	publicops "github.com/steveyegge/beads/issueops"
 )
 
-func newTestUOWProvider(t *testing.T) UnitOfWorkProvider {
+func openTestUOWProvider(t *testing.T, bin string) (UnitOfWorkProvider, error) {
 	t.Helper()
-	testutil.RequireDoltBinary(t)
-	bin, err := exec.LookPath("dolt")
-	require.NoError(t, err)
-
-	bdBin := buildBDBinary(t)
-	prev := proxy.ResolveExecutable
-	proxy.ResolveExecutable = func() (string, error) { return bdBin, nil }
-	t.Cleanup(func() { proxy.ResolveExecutable = prev })
-
-	t.Setenv("HOME", t.TempDir())
-
 	port, err := proxy.PickFreePort()
-	require.NoError(t, err)
+	if err != nil {
+		return nil, err
+	}
 	storeRootDir := t.TempDir()
 	shutdownOnInterrupt(t, storeRootDir)
 	verifiedShutdownCleanup(t, storeRootDir)
 	cfgPath := writeServerConfig(t, port)
 	logPath := filepath.Join(t.TempDir(), "server.log")
-
-	provider, err := NewDoltServerUOWProvider(
+	return NewDoltServerUOWProvider(
 		context.Background(),
 		storeRootDir,
 		"beads",

@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"testing"
@@ -12,15 +10,39 @@ import (
 	"github.com/steveyegge/beads/internal/types"
 )
 
+// parkedCaptures keeps the pipe ends of every timed-out capture reachable for
+// the life of the test binary. The runaway writer is parked on the full pipe;
+// if the read end were garbage-collected its finalizer would close it, the
+// parked write would fail with EPIPE, and the writer's next Printf would
+// resolve os.Stdout afresh and resume against the real stdout or the next
+// test's capture. It only grows when a test fails, by two descriptors.
+var parkedCaptures []*os.File
+
+const (
+	// captureLimit bounds what a capture keeps; past it the writer blocks on
+	// the full pipe instead of growing a buffer.
+	captureLimit = 1 << 20
+	// captureDeadline is how long a walk may run before it is declared hung.
+	captureDeadline = 10 * time.Second
+)
+
 // captureBoundedStdout runs fn with os.Stdout redirected and returns what it
-// printed, discarding anything past limit.
+// wrote and whether it returned before the deadline.
 //
-// The package already has captureStdout (test_helpers_pure_test.go), but it
-// buffers without a cap: against an unguarded renderer, whose output is
-// unbounded, that helper would exhaust memory instead of failing the test. This
-// variant caps the read and keeps draining so the writer never blocks on a full
-// pipe. It takes the same stdioMutex to stay race-free with the existing helper.
-func captureBoundedStdout(t *testing.T, limit int64, fn func()) string {
+// It exists for tests whose failure mode is "never returns": the reader stops
+// after captureLimit bytes, so a runaway writer blocks on the full pipe instead
+// of growing a buffer until the host swaps, and os.Stdout is restored before
+// the function returns, so a failing test does not leave the package's stdout
+// redirected for every later test. On deadline the writer goroutine is left
+// parked on the pipe.
+//
+// Two consequences of that design, both confined to the regression case:
+// fn must write less than captureLimit bytes, since larger legitimate output
+// would block on the pipe and read as a hang (the fixtures here print a
+// handful of lines); and if fn is still running at the deadline, restoring
+// os.Stdout races with its next read of that variable, so go test -race
+// reports a data race next to the failure it already produces.
+func captureBoundedStdout(t *testing.T, fn func()) (out string, terminated bool) {
 	t.Helper()
 
 	stdioMutex.Lock()
@@ -30,193 +52,268 @@ func captureBoundedStdout(t *testing.T, limit int64, fn func()) string {
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
 	}
-	orig := os.Stdout
+	oldStdout := os.Stdout
 	os.Stdout = w
 
-	done := make(chan string, 1)
+	read := make(chan string, 1)
 	go func() {
-		var buf bytes.Buffer
-		if _, err := io.Copy(&buf, io.LimitReader(r, limit)); err != nil {
-			done <- fmt.Sprintf("capture read error: %v", err)
-			return
+		buf := make([]byte, captureLimit)
+		n := 0
+		for n < captureLimit {
+			m, err := r.Read(buf[n:])
+			n += m
+			if err != nil {
+				break
+			}
 		}
-		// Drain any remainder so the writer never blocks on a full pipe.
-		if _, err := io.Copy(io.Discard, r); err != nil {
-			done <- fmt.Sprintf("capture drain error: %v", err)
-			return
-		}
-		done <- buf.String()
+		read <- string(buf[:n])
 	}()
 
-	fn()
-
-	os.Stdout = orig
-	if err := w.Close(); err != nil {
-		t.Fatalf("close capture writer: %v", err)
-	}
-	out := <-done
-	if err := r.Close(); err != nil {
-		t.Fatalf("close capture reader: %v", err)
-	}
-	return out
-}
-
-// treeTestIssue builds a tree fixture whose title never repeats its ID, so a
-// test counting ID occurrences counts rendered nodes, not title text.
-func treeTestIssue(id, issueType string) *types.Issue {
-	now := time.Now()
-	return &types.Issue{
-		ID:        id,
-		Title:     issueType + " fixture",
-		IssueType: types.IssueType(issueType),
-		Status:    "open",
-		Priority:  1,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-}
-
-// epicBlockedByItsOwnChild builds the shape reported upstream in #5887: an epic
-// and its child, where the epic is also blocked by that child.
-//
-//	child --parent-child--> epic     (child belongs to the epic)
-//	epic  --blocks-------->  child   (epic is blocked by its own child)
-func epicBlockedByItsOwnChild() ([]*types.Issue, map[string][]*types.Dependency) {
-	parent, child := treeTestIssue("bd-ep41", "epic"), treeTestIssue("bd-ep40", "epic")
-	deps := map[string][]*types.Dependency{
-		child.ID:  {{IssueID: child.ID, DependsOnID: parent.ID, Type: types.DepParentChild}},
-		parent.ID: {{IssueID: parent.ID, DependsOnID: child.ID, Type: types.DepBlocks}},
-	}
-	return []*types.Issue{parent, child}, deps
-}
-
-// TestBuildIssueTreeWithDeps_BlocksIsNotHierarchy covers upstream #5887: a
-// `blocks` edge must not become a tree edge; the parent-child edge still nests.
-func TestBuildIssueTreeWithDeps_BlocksIsNotHierarchy(t *testing.T) {
-	issues, deps := epicBlockedByItsOwnChild()
-	parent, child := issues[0], issues[1]
-
-	roots, childrenMap := buildIssueTreeWithDeps(issues, deps)
-
-	if len(roots) != 1 || roots[0].ID != parent.ID {
-		t.Errorf("roots = %v, want exactly [%s]", roots, parent.ID)
-	}
-	if got := childrenMap[parent.ID]; len(got) != 1 || got[0].ID != child.ID {
-		t.Errorf("childrenMap[%s] = %v, want [%s]", parent.ID, got, child.ID)
-	}
-	if got := childrenMap[child.ID]; len(got) != 0 {
-		t.Errorf("childrenMap[%s] = %v, want empty: a blocks edge is not containment", child.ID, got)
-	}
-}
-
-// TestDisplayPrettyList_EpicBlockedByChildTerminates is the end-to-end guard for
-// #5887 through the public list entry point.
-func TestDisplayPrettyList_EpicBlockedByChildTerminates(t *testing.T) {
-	issues, deps := epicBlockedByItsOwnChild()
-
-	finished := make(chan string, 1)
+	done := make(chan struct{})
 	go func() {
-		finished <- captureBoundedStdout(t, 1<<20, func() {
-			displayPrettyListWithDeps(issues, false, deps, false, false, "")
-		})
+		fn()
+		close(done)
 	}()
 
 	select {
-	case out := <-finished:
-		if !strings.Contains(out, "Total: 2 issues") {
-			t.Errorf("summary missing; got:\n%s", out)
+	case <-done:
+		terminated = true
+		os.Stdout = oldStdout
+		_ = w.Close()
+		out = <-read
+		_ = r.Close()
+	case <-time.After(captureDeadline):
+		os.Stdout = oldStdout
+		// Leave both pipe ends open, and referenced, on purpose: parked on
+		// the full pipe the runaway writer costs nothing and cannot escape.
+		parkedCaptures = append(parkedCaptures, r, w)
+		select {
+		case out = <-read:
+		case <-time.After(time.Second):
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("displayPrettyListWithDeps did not terminate on the #5887 graph")
 	}
+	return out, terminated
 }
 
-// TestPrintPrettyTree_TerminatesOnCycle forces a cycle directly into childrenMap,
-// bypassing tree construction, so the renderer's own defenses are under test.
-// An unguarded renderer never returns here.
-func TestPrintPrettyTree_TerminatesOnCycle(t *testing.T) {
-	a, b := treeTestIssue("bd-cyca", "epic"), treeTestIssue("bd-cycb", "epic")
+func cycleTestIssue(id, title, issueType string) *types.Issue {
+	return &types.Issue{ID: id, Title: title, IssueType: types.IssueType(issueType), Status: types.StatusOpen, Priority: 1}
+}
+
+// The renderer must terminate on a cyclic childrenMap and show the repeated
+// ancestor exactly once, marked. Titles are distinct from IDs so an ID count
+// counts rendered lines, not title echoes.
+func TestPrintPrettyTree_CycleRendersAncestorOnce(t *testing.T) {
+	a := cycleTestIssue("bd-a", "alpha", "epic")
+	b := cycleTestIssue("bd-b", "beta", "epic")
+	c := cycleTestIssue("bd-c", "gamma", "task")
 	childrenMap := map[string][]*types.Issue{
-		a.ID: {b},
-		b.ID: {a},
+		"bd-a": {b},
+		"bd-b": {a, c}, // b -> a closes the cycle; c is an ordinary leaf
 	}
 
-	const limit = 1 << 20 // far above any sane output
-
-	finished := make(chan string, 1)
-	go func() {
-		finished <- captureBoundedStdout(t, limit, func() {
-			printPrettyTree(childrenMap, a.ID, "", nil)
-		})
-	}()
-
-	select {
-	case out := <-finished:
-		if !strings.Contains(out, "(cycle)") {
-			t.Errorf("cycle closure not marked; got:\n%s", out)
-		}
-		if n := strings.Count(out, b.ID); n != 1 {
-			t.Errorf("%s rendered %d times, want exactly 1 before the cycle is cut:\n%s", b.ID, n, out)
-		}
-		if len(out) >= limit {
-			t.Errorf("output hit the %d byte cap: renderer is still unbounded", limit)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("printPrettyTree did not terminate on a cyclic childrenMap")
-	}
-}
-
-// TestPrintPrettyTree_DiamondStillRendersBothPaths guards against over-cutting:
-// the visited set is path-scoped, so a node reachable through two parents
-// renders under each and is not reported as a cycle.
-func TestPrintPrettyTree_DiamondStillRendersBothPaths(t *testing.T) {
-	root, left, right, leaf := treeTestIssue("bd-d0", "task"), treeTestIssue("bd-d1", "task"),
-		treeTestIssue("bd-d2", "task"), treeTestIssue("bd-d3", "task")
-	// Distinct title so counting the ID is not doubled by the title column.
-	leaf.Title = "shared leaf"
-
-	childrenMap := map[string][]*types.Issue{
-		root.ID:  {left, right},
-		left.ID:  {leaf},
-		right.ID: {leaf},
-	}
-
-	out := captureBoundedStdout(t, 1<<20, func() {
-		printPrettyTree(childrenMap, root.ID, "", nil)
+	out, terminated := captureBoundedStdout(t, func() {
+		printPrettyTree(childrenMap, "bd-a", "", nil, compareIssuesByPriority)
 	})
-
-	if n := strings.Count(out, leaf.ID); n != 2 {
-		t.Errorf("%s rendered %d times, want 2 (once under each parent):\n%s", leaf.ID, n, out)
+	if !terminated {
+		t.Fatalf("printPrettyTree did not return within %v on a cyclic tree; first output:\n%s", captureDeadline, head(out, 20))
 	}
-	if strings.Contains(out, "(cycle)") {
-		t.Errorf("diamond wrongly reported as a cycle:\n%s", out)
-	}
-}
-
-// TestPrintPrettyTree_DepthCeilingIsVisible verifies a chain deeper than the
-// shared ceiling stops at defaultTreeMaxDepth and marks the cut node with the
-// truncation marker instead of silently dropping its subtree.
-func TestPrintPrettyTree_DepthCeilingIsVisible(t *testing.T) {
-	const chain = defaultTreeMaxDepth + 5
-	nodes := make([]*types.Issue, chain+1)
-	for i := range nodes {
-		nodes[i] = treeTestIssue(fmt.Sprintf("bd-deep%03d", i), "task")
-	}
-	childrenMap := make(map[string][]*types.Issue, chain)
-	for i := 0; i < chain; i++ {
-		childrenMap[nodes[i].ID] = []*types.Issue{nodes[i+1]}
-	}
-
-	out := captureBoundedStdout(t, 1<<20, func() {
-		printPrettyTree(childrenMap, nodes[0].ID, "", nil)
-	})
 
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	if len(lines) != defaultTreeMaxDepth {
-		t.Fatalf("rendered %d lines, want %d (the depth ceiling):\n%s", len(lines), defaultTreeMaxDepth, out)
+	if len(lines) != 3 {
+		t.Fatalf("expected exactly 3 lines (b, a marked as cycle, c), got %d:\n%s", len(lines), out)
 	}
-	last := lines[len(lines)-1]
-	if !strings.Contains(last, nodes[defaultTreeMaxDepth].ID) || !strings.Contains(last, "…") {
-		t.Errorf("last rendered line %q must be %s carrying the truncation marker", last, nodes[defaultTreeMaxDepth].ID)
+	if !strings.Contains(lines[0], "bd-b") || strings.Contains(lines[0], treeCycleMarker) {
+		t.Fatalf("line 1 should be b without a marker:\n%s", out)
 	}
+	if !strings.Contains(lines[1], "bd-a") || !strings.Contains(lines[1], treeCycleMarker) {
+		t.Fatalf("line 2 should be the ancestor a carrying the cycle marker:\n%s", out)
+	}
+	if !strings.Contains(lines[2], "bd-c") || strings.Contains(lines[2], treeCycleMarker) {
+		t.Fatalf("line 3 should be the sibling leaf c without a marker:\n%s", out)
+	}
+	if n := strings.Count(out, "bd-a"); n != 1 {
+		t.Fatalf("ancestor bd-a must render exactly once, got %d:\n%s", n, out)
+	}
+}
+
+// A node reachable through two parents is a diamond, not a cycle: it must
+// render under both and carry no marker. This pins the guard to the ancestor
+// path so it cannot drift into a whole-walk visited set.
+func TestPrintPrettyTree_DiamondRendersUnderBothParents(t *testing.T) {
+	a := cycleTestIssue("bd-a", "alpha", "epic")
+	b := cycleTestIssue("bd-b", "beta", "epic")
+	c := cycleTestIssue("bd-c", "shared leaf", "task")
+	childrenMap := map[string][]*types.Issue{
+		"bd-a": {b, c},
+		"bd-b": {c},
+	}
+
+	out, terminated := captureBoundedStdout(t, func() {
+		printPrettyTree(childrenMap, "bd-a", "", nil, compareIssuesByPriority)
+	})
+	if !terminated {
+		t.Fatalf("printPrettyTree did not return on an acyclic diamond:\n%s", head(out, 20))
+	}
+	if n := strings.Count(out, "bd-c"); n != 2 {
+		t.Fatalf("shared child must render under both parents (2), got %d:\n%s", n, out)
+	}
+	if strings.Contains(out, treeCycleMarker) {
+		t.Fatalf("diamond wrongly reported as a cycle:\n%s", out)
+	}
+	_ = a
+}
+
+func TestPrintPrettyTree_DepthCeilingIsVisible(t *testing.T) {
+	children := make(map[string][]*types.Issue)
+	for i := 0; i < defaultTreeMaxDepth+1; i++ {
+		parent := fmt.Sprintf("bd-%02d", i)
+		child := cycleTestIssue(fmt.Sprintf("bd-%02d", i+1), "node", "task")
+		children[parent] = []*types.Issue{child}
+	}
+	out, terminated := captureBoundedStdout(t, func() {
+		printPrettyTree(children, "bd-00", "", nil, compareIssuesByPriority)
+	})
+	if !terminated {
+		t.Fatalf("depth-limited tree did not return within %v", captureDeadline)
+	}
+	if got := strings.Count(out, "bd-"); got != defaultTreeMaxDepth {
+		t.Fatalf("expected %d rendered descendants at depth ceiling, got %d:\n%s", defaultTreeMaxDepth, got, head(out, 55))
+	}
+	if !strings.Contains(out, "…") {
+		t.Fatalf("expected visible depth-ceiling marker:\n%s", head(out, 55))
+	}
+}
+
+func TestBuildIssueTreeWithDeps_BlocksIsNotHierarchy(t *testing.T) {
+	parent := cycleTestIssue("bd-parent", "parent", "epic")
+	child := cycleTestIssue("bd-child", "child", "task")
+	issues := []*types.Issue{parent, child}
+	deps := map[string][]*types.Dependency{
+		"bd-child": {{IssueID: "bd-child", DependsOnID: "bd-parent", Type: types.DepBlocks}},
+	}
+	roots, children := buildIssueTreeWithDeps(issues, deps)
+	if len(roots) != 2 {
+		t.Fatalf("blocks edge must leave both issues as roots, got %v", idsOf(roots))
+	}
+	if len(children["bd-parent"]) != 0 {
+		t.Fatalf("blocks edge must not create hierarchy: %v", children["bd-parent"])
+	}
+}
+
+// End to end through the public path: a rooted parent-child cycle in real
+// dependency rows (R <- A <- B <- A) reaches the renderer via
+// buildIssueTreeWithDeps, so this covers rows that bypassed dep-add
+// validation (JSONL import, older builds). Without the guard this hangs.
+func TestDisplayPrettyList_RootedParentChildCycleTerminates(t *testing.T) {
+	r := cycleTestIssue("bd-r", "root", "epic")
+	a := cycleTestIssue("bd-a", "alpha", "epic")
+	b := cycleTestIssue("bd-b", "beta", "epic")
+	issues := []*types.Issue{r, a, b}
+	allDeps := map[string][]*types.Dependency{
+		"bd-a": {
+			{IssueID: "bd-a", DependsOnID: "bd-r", Type: types.DepParentChild},
+			{IssueID: "bd-a", DependsOnID: "bd-b", Type: types.DepParentChild},
+		},
+		"bd-b": {
+			{IssueID: "bd-b", DependsOnID: "bd-a", Type: types.DepParentChild},
+		},
+	}
+
+	roots, childrenMap := buildIssueTreeWithDeps(issues, allDeps)
+	if len(roots) != 1 || roots[0].ID != "bd-r" {
+		t.Fatalf("fixture must have the single root bd-r, got %v", roots)
+	}
+	if len(childrenMap["bd-a"]) != 1 || len(childrenMap["bd-b"]) != 1 {
+		t.Fatalf("fixture must carry the a <-> b hierarchy cycle, got %v", childrenMap)
+	}
+
+	out, terminated := captureBoundedStdout(t, func() {
+		displayPrettyListWithDeps(issues, false, allDeps, false, false, "")
+	})
+	if !terminated {
+		t.Fatalf("bd list tree rendering did not return within %v on a parent-child cycle; first output:\n%s", captureDeadline, head(out, 20))
+	}
+	if n := strings.Count(out, treeCycleMarker); n != 1 {
+		t.Fatalf("expected exactly one cycle marker, got %d:\n%s", n, out)
+	}
+	if n := strings.Count(out, "bd-a"); n != 2 {
+		t.Fatalf("bd-a must render once as a node and once as the marked ancestor (2), got %d:\n%s", n, out)
+	}
+	for _, id := range []string{"bd-r", "bd-b"} {
+		if n := strings.Count(out, id); n != 1 {
+			t.Fatalf("%s must render exactly once, got %d:\n%s", id, n, out)
+		}
+	}
+}
+
+// The --deps arm of the guard: dependency annotations belong to an ancestor's
+// first appearance, never to the marked cycle line. Every other case here runs
+// with dr == nil, so nothing would redden if a later edit moved the onPath
+// check below dr.annotationsFor or outside the set/delete pair around the
+// recursion. bd-a carries a non-hierarchy edge on purpose: parent-child edges
+// never annotate (depEdgeDisplay), so without one there would be no annotation
+// to misplace and the assertion would hold vacuously.
+func TestDisplayPrettyListWithDepsMode_CycleMarkerCarriesNoAnnotations(t *testing.T) {
+	r := cycleTestIssue("bd-r", "root", "epic")
+	a := cycleTestIssue("bd-a", "alpha", "epic")
+	b := cycleTestIssue("bd-b", "beta", "epic")
+	x := cycleTestIssue("bd-x", "blocker", "task")
+	issues := []*types.Issue{r, a, b, x}
+	allDeps := map[string][]*types.Dependency{
+		"bd-a": {
+			{IssueID: "bd-a", DependsOnID: "bd-r", Type: types.DepParentChild},
+			{IssueID: "bd-a", DependsOnID: "bd-b", Type: types.DepParentChild},
+			{IssueID: "bd-a", DependsOnID: "bd-x", Type: types.DepBlocks},
+		},
+		"bd-b": {
+			{IssueID: "bd-b", DependsOnID: "bd-a", Type: types.DepParentChild},
+		},
+	}
+
+	out, terminated := captureBoundedStdout(t, func() {
+		displayPrettyListWithDepsMode(issues, false, allDeps, "all", false, false, "", "", false)
+	})
+	if !terminated {
+		t.Fatalf("bd list --tree --deps did not return within %v on a parent-child cycle; first output:\n%s", captureDeadline, head(out, 20))
+	}
+
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	marked := -1
+	for i, line := range lines {
+		if !strings.Contains(line, treeCycleMarker) {
+			continue
+		}
+		if marked >= 0 {
+			t.Fatalf("expected exactly one cycle marker, found a second on line %d:\n%s", i+1, out)
+		}
+		marked = i
+	}
+	if marked < 0 {
+		t.Fatalf("expected the cycle marker on bd-a's repeat under bd-b:\n%s", out)
+	}
+	if !strings.Contains(lines[marked], "bd-a") {
+		t.Fatalf("the marker belongs to the ancestor bd-a:\n%s", out)
+	}
+	if marked+1 < len(lines) && strings.Contains(lines[marked+1], depGlyph) {
+		t.Fatalf("the marked line must not be followed by its dependency annotations:\n%s", out)
+	}
+	// The trailing legend carries depGlyph too, so count annotation rows by
+	// their target rather than by the glyph alone.
+	annotations := 0
+	for _, line := range lines {
+		if strings.Contains(line, depGlyph) && strings.Contains(line, "bd-x") {
+			annotations++
+		}
+	}
+	if annotations != 1 {
+		t.Fatalf("bd-a's depends-on row must render exactly once, under its first appearance, got %d:\n%s", annotations, out)
+	}
+}
+
+func head(s string, n int) string {
+	lines := strings.SplitN(s, "\n", n+1)
+	if len(lines) > n {
+		lines = lines[:n]
+	}
+	return strings.Join(lines, "\n")
 }
