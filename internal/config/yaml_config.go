@@ -13,7 +13,6 @@ import (
 	"github.com/steveyegge/beads/internal/ceiling"
 	"github.com/steveyegge/beads/internal/git"
 	"github.com/steveyegge/beads/internal/gitenv"
-	"github.com/steveyegge/beads/internal/utils"
 	"gopkg.in/yaml.v3"
 )
 
@@ -747,6 +746,19 @@ func projectConfigPathFromLoadedState() string {
 	return configPath
 }
 
+// sameDirectory reports whether two directory paths name the same directory,
+// tolerating symlink and case-form differences between the walk's spelling
+// and the git root's. internal/utils cannot be imported here: its test
+// graph imports this package, and the cycle breaks go test.
+func sameDirectory(a, b string) bool {
+	if a == b {
+		return true
+	}
+	infoA, errA := os.Stat(a)
+	infoB, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(infoA, infoB)
+}
+
 func findProjectBeadsDir() string {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -766,7 +778,7 @@ func findProjectBeadsDir() string {
 		if info, err := os.Stat(beadsDir); err == nil && info.IsDir() {
 			return beadsDir
 		}
-		if utils.PathsEqual(dir, root) {
+		if sameDirectory(dir, root) {
 			break
 		}
 	}
