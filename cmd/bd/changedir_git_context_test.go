@@ -59,6 +59,26 @@ func assertGitEnvUnset(t *testing.T) {
 	}
 }
 
+// assertSameDir fails unless got and want name the same existing directory.
+// Both sides resolve through symlinks before comparing: on macOS t.TempDir
+// hands out /var/folders/... while git resolves the same directory to
+// /private/var/folders/..., and the contract under test is identity of the
+// directory, not of its spelling.
+func assertSameDir(t *testing.T, what, got, want string) {
+	t.Helper()
+	gotReal, err := filepath.EvalSymlinks(got)
+	if err != nil {
+		t.Fatalf("%s: resolve %q: %v", what, got, err)
+	}
+	wantReal, err := filepath.EvalSymlinks(want)
+	if err != nil {
+		t.Fatalf("%s: resolve %q: %v", what, want, err)
+	}
+	if gotReal != wantReal {
+		t.Errorf("%s = %q, want %q (same directory)", what, got, want)
+	}
+}
+
 func TestRetargetGitContextPointsGitEnvAtTargetRepo(t *testing.T) {
 	isolateGitEnv(t)
 	dirA := t.TempDir()
@@ -74,8 +94,10 @@ func TestRetargetGitContextPointsGitEnvAtTargetRepo(t *testing.T) {
 	// Prime the internal/git cache with the caller's repository so the test
 	// observes that retargeting invalidates it. GetGitCommonDir is absolute
 	// (GetGitDir echoes git's cwd-relative ".git").
-	if got, err := git.GetGitCommonDir(); err != nil || got != gitDirA {
-		t.Fatalf("precondition: git.GetGitCommonDir() = %q, %v; want %q", got, err, gitDirA)
+	if got, err := git.GetGitCommonDir(); err != nil {
+		t.Fatalf("precondition: git.GetGitCommonDir(): %v", err)
+	} else {
+		assertSameDir(t, "precondition: git.GetGitCommonDir()", got, gitDirA)
 	}
 
 	// Retarget from a nested directory: the repository is resolved from the
@@ -83,18 +105,16 @@ func TestRetargetGitContextPointsGitEnvAtTargetRepo(t *testing.T) {
 	if err := retargetGitContext(subdirB); err != nil {
 		t.Fatalf("retargetGitContext(%q): %v", subdirB, err)
 	}
-	if got := os.Getenv("GIT_DIR"); got != gitDirB {
-		t.Errorf("GIT_DIR = %q, want target repo git dir %q", got, gitDirB)
-	}
+	assertSameDir(t, "GIT_DIR", os.Getenv("GIT_DIR"), gitDirB)
 	wantWorkTree, err := exec.Command("git", "-C", dirB, "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := os.Getenv("GIT_WORK_TREE"); got != strings.TrimSpace(string(wantWorkTree)) {
-		t.Errorf("GIT_WORK_TREE = %q, want %q", got, strings.TrimSpace(string(wantWorkTree)))
-	}
-	if got, err := git.GetGitCommonDir(); err != nil || got != gitDirB {
-		t.Errorf("git.GetGitCommonDir() after retarget = %q, %v; want %q (cache must be reset)", got, err, gitDirB)
+	assertSameDir(t, "GIT_WORK_TREE", os.Getenv("GIT_WORK_TREE"), strings.TrimSpace(string(wantWorkTree)))
+	if got, err := git.GetGitCommonDir(); err != nil {
+		t.Errorf("git.GetGitCommonDir() after retarget: %v", err)
+	} else {
+		assertSameDir(t, "git.GetGitCommonDir() after retarget", got, gitDirB)
 	}
 	// Decisive observable: plain git from the caller's cwd now resolves the
 	// TARGET repo; this is what makes hooks install land in the -C target.
@@ -102,9 +122,7 @@ func TestRetargetGitContextPointsGitEnvAtTargetRepo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.TrimSpace(string(out)); got != gitDirB {
-		t.Errorf("git rev-parse resolved %q, want %q", got, gitDirB)
-	}
+	assertSameDir(t, "git rev-parse resolved", strings.TrimSpace(string(out)), gitDirB)
 }
 
 func TestRetargetGitContextNonRepoIsNoOp(t *testing.T) {

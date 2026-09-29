@@ -43,6 +43,7 @@ import (
 	"github.com/steveyegge/beads/internal/configfile"
 	"github.com/steveyegge/beads/internal/debug"
 	"github.com/steveyegge/beads/internal/doltserver"
+	"github.com/steveyegge/beads/internal/gitenv"
 	"github.com/steveyegge/beads/internal/gittraceenv"
 	"github.com/steveyegge/beads/internal/storage"
 	"github.com/steveyegge/beads/internal/storage/doltutil"
@@ -4080,13 +4081,15 @@ func prepareDoltCLITransferCommand(ctx context.Context, cliDir string, creds *re
 	if s3Remote {
 		applyS3ChecksumEnvToCmd(cmd)
 	}
-	// Stderr-directed git tracing corrupts the transfer (see internal/gittraceenv);
-	// mirrors withRemoteEnvGuards on the in-process path.
+	// Stderr-directed git tracing corrupts the transfer (see internal/gittraceenv)
+	// and bd's git routing entries (GIT_DIR/GIT_WORK_TREE from the -C retarget)
+	// would leak into the git plumbing this dolt child spawns for git-protocol
+	// remotes; mirrors withRemoteEnvGuards on the in-process path.
 	base := cmd.Env
 	if base == nil {
 		base = os.Environ()
 	}
-	cmd.Env = gittraceenv.ScrubEnv(base)
+	cmd.Env = gitenv.ScrubRouting(gittraceenv.ScrubEnv(base))
 	return cmd, ctx, cancel
 }
 
