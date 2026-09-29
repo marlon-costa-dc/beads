@@ -208,7 +208,7 @@ func TestInitSchemaConvergenceProbeRunsWithNoSessionDatabase(t *testing.T) {
 	stderr := captureStderr(t, func() {
 		err = p.initSchema(context.Background(), "beads")
 	})
-	if !strings.Contains(stderr, "Warning: applying 66 pending schema migration(s)") {
+	if !strings.Contains(stderr, "Warning: applying ") || !strings.Contains(stderr, " pending schema migration(s) to a shared server database") {
 		t.Fatalf("shared-store migration warning = %q, want pending-migrations warning", stderr)
 	}
 	if err == nil || !strings.Contains(err.Error(), "first migration statement failed") {
