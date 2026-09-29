@@ -2,11 +2,47 @@ package main
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/steveyegge/beads/internal/config"
 )
 
+// sideEffectStore returns a store directory whose config.yaml carries body
+// (no config.yaml when body is ""); the store's own file decides Dolt
+// ownership.
+func sideEffectStore(t *testing.T, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if body != "" {
+		if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(body), 0o600); err != nil {
+			t.Fatalf("write config.yaml: %v", err)
+		}
+	}
+	return dir
+}
+
+func setEffects(t *testing.T, beadsDir, key, value string) []configSideEffect {
+	t.Helper()
+	effects, err := checkConfigSetSideEffects(beadsDir, key, value)
+	if err != nil {
+		t.Fatalf("checkConfigSetSideEffects(%q, %q): %v", key, value, err)
+	}
+	return effects
+}
+
+func unsetEffects(t *testing.T, beadsDir, key string) []configSideEffect {
+	t.Helper()
+	effects, err := checkConfigUnsetSideEffects(beadsDir, key)
+	if err != nil {
+		t.Fatalf("checkConfigUnsetSideEffects(%q): %v", key, err)
+	}
+	return effects
+}
+
 func TestCheckConfigSetSideEffects_FederationRemote(t *testing.T) {
-	effects := checkConfigSetSideEffects("federation.remote", "dolthub://org/proj")
+	effects := setEffects(t, sideEffectStore(t, ""), "federation.remote", "dolthub://org/proj")
 	if len(effects) != 1 {
 		t.Fatalf("expected 1 effect, got %d", len(effects))
 	}
@@ -16,7 +52,7 @@ func TestCheckConfigSetSideEffects_FederationRemote(t *testing.T) {
 }
 
 func TestCheckConfigSetSideEffects_SharedServerTrue(t *testing.T) {
-	effects := checkConfigSetSideEffects("dolt.shared-server", "true")
+	effects := setEffects(t, sideEffectStore(t, ""), "dolt.shared-server", "true")
 	if len(effects) != 1 {
 		t.Fatalf("expected 1 effect, got %d", len(effects))
 	}
@@ -26,7 +62,7 @@ func TestCheckConfigSetSideEffects_SharedServerTrue(t *testing.T) {
 }
 
 func TestCheckConfigSetSideEffects_SharedServerFalse(t *testing.T) {
-	effects := checkConfigSetSideEffects("dolt.shared-server", "false")
+	effects := setEffects(t, sideEffectStore(t, ""), "dolt.shared-server", "false")
 	if len(effects) != 1 {
 		t.Fatalf("expected 1 effect, got %d", len(effects))
 	}
@@ -36,7 +72,7 @@ func TestCheckConfigSetSideEffects_SharedServerFalse(t *testing.T) {
 }
 
 func TestCheckConfigSetSideEffects_DoltDebugTrue(t *testing.T) {
-	effects := checkConfigSetSideEffects("dolt.debug", "true")
+	effects := setEffects(t, sideEffectStore(t, ""), "dolt.debug", "true")
 	if len(effects) != 1 {
 		t.Fatalf("expected 1 effect, got %d", len(effects))
 	}
@@ -46,7 +82,7 @@ func TestCheckConfigSetSideEffects_DoltDebugTrue(t *testing.T) {
 }
 
 func TestCheckConfigSetSideEffects_DoltDebugFalse(t *testing.T) {
-	effects := checkConfigSetSideEffects("dolt.debug", "false")
+	effects := setEffects(t, sideEffectStore(t, ""), "dolt.debug", "false")
 	if len(effects) != 1 {
 		t.Fatalf("expected 1 effect, got %d", len(effects))
 	}
@@ -56,7 +92,7 @@ func TestCheckConfigSetSideEffects_DoltDebugFalse(t *testing.T) {
 }
 
 func TestCheckConfigUnsetSideEffects_DoltDebug(t *testing.T) {
-	effects := checkConfigUnsetSideEffects("dolt.debug")
+	effects := unsetEffects(t, sideEffectStore(t, ""), "dolt.debug")
 	if len(effects) != 1 {
 		t.Fatalf("expected 1 effect, got %d", len(effects))
 	}
@@ -65,8 +101,35 @@ func TestCheckConfigUnsetSideEffects_DoltDebug(t *testing.T) {
 	}
 }
 
+// TestConfigSideEffects_DoltDebugOnCityOwnedStore proves the restart hint
+// follows the store's Gas City ownership stamp.
+func TestConfigSideEffects_DoltDebugOnCityOwnedStore(t *testing.T) {
+	dir := sideEffectStore(t, config.GasCityEndpointOriginKey+": "+string(config.GasCityOriginInheritedCity)+"\n")
+	for _, effects := range [][]configSideEffect{
+		setEffects(t, dir, "dolt.debug", "true"),
+		setEffects(t, dir, "dolt.debug", "false"),
+		unsetEffects(t, dir, "dolt.debug"),
+	} {
+		if len(effects) != 1 || effects[0].Command != "gc stop && gc start" {
+			t.Fatalf("effects = %+v, want one restart hint naming gc", effects)
+		}
+	}
+}
+
+// TestConfigSideEffects_DoltDebugInvalidOwnershipIsAnError proves an unknown
+// gc.endpoint_origin fails the hint instead of printing the bd restart.
+func TestConfigSideEffects_DoltDebugInvalidOwnershipIsAnError(t *testing.T) {
+	dir := sideEffectStore(t, config.GasCityEndpointOriginKey+": somebody_else\n")
+	if effects, err := checkConfigSetSideEffects(dir, "dolt.debug", "true"); err == nil || !strings.Contains(err.Error(), "somebody_else") {
+		t.Fatalf("checkConfigSetSideEffects = (%+v, %v), want the invalid-origin error", effects, err)
+	}
+	if effects, err := checkConfigUnsetSideEffects(dir, "dolt.debug"); err == nil || !strings.Contains(err.Error(), "somebody_else") {
+		t.Fatalf("checkConfigUnsetSideEffects = (%+v, %v), want the invalid-origin error", effects, err)
+	}
+}
+
 func TestCheckConfigSetSideEffects_RoutingModeInvalid(t *testing.T) {
-	effects := checkConfigSetSideEffects("routing.mode", "bogus")
+	effects := setEffects(t, sideEffectStore(t, ""), "routing.mode", "bogus")
 	if len(effects) != 1 {
 		t.Fatalf("expected 1 effect, got %d", len(effects))
 	}
@@ -76,8 +139,9 @@ func TestCheckConfigSetSideEffects_RoutingModeInvalid(t *testing.T) {
 }
 
 func TestCheckConfigSetSideEffects_RoutingModeValid(t *testing.T) {
+	dir := sideEffectStore(t, "")
 	for _, mode := range []string{"auto", "maintainer", "contributor", "explicit"} {
-		effects := checkConfigSetSideEffects("routing.mode", mode)
+		effects := setEffects(t, dir, "routing.mode", mode)
 		if len(effects) != 0 {
 			t.Errorf("expected 0 effects for valid routing mode %q, got %d", mode, len(effects))
 		}
@@ -85,28 +149,28 @@ func TestCheckConfigSetSideEffects_RoutingModeValid(t *testing.T) {
 }
 
 func TestCheckConfigSetSideEffects_BackupEnabled(t *testing.T) {
-	effects := checkConfigSetSideEffects("backup.enabled", "true")
+	effects := setEffects(t, sideEffectStore(t, ""), "backup.enabled", "true")
 	if len(effects) != 1 {
 		t.Fatalf("expected 1 effect, got %d", len(effects))
 	}
 }
 
 func TestCheckConfigSetSideEffects_SyncGitRemote(t *testing.T) {
-	effects := checkConfigSetSideEffects("sync.git-remote", "origin")
+	effects := setEffects(t, sideEffectStore(t, ""), "sync.git-remote", "origin")
 	if len(effects) != 1 {
 		t.Fatalf("expected 1 effect, got %d", len(effects))
 	}
 }
 
 func TestCheckConfigSetSideEffects_UnknownKey(t *testing.T) {
-	effects := checkConfigSetSideEffects("some.random.key", "value")
+	effects := setEffects(t, sideEffectStore(t, ""), "some.random.key", "value")
 	if len(effects) != 0 {
 		t.Errorf("expected 0 effects for unknown key, got %d", len(effects))
 	}
 }
 
 func TestCheckConfigUnsetSideEffects_FederationRemote(t *testing.T) {
-	effects := checkConfigUnsetSideEffects("federation.remote")
+	effects := unsetEffects(t, sideEffectStore(t, ""), "federation.remote")
 	if len(effects) != 1 {
 		t.Fatalf("expected 1 effect, got %d", len(effects))
 	}
@@ -116,21 +180,21 @@ func TestCheckConfigUnsetSideEffects_FederationRemote(t *testing.T) {
 }
 
 func TestCheckConfigUnsetSideEffects_SharedServer(t *testing.T) {
-	effects := checkConfigUnsetSideEffects("dolt.shared-server")
+	effects := unsetEffects(t, sideEffectStore(t, ""), "dolt.shared-server")
 	if len(effects) != 1 {
 		t.Fatalf("expected 1 effect, got %d", len(effects))
 	}
 }
 
 func TestCheckConfigUnsetSideEffects_BackupEnabled(t *testing.T) {
-	effects := checkConfigUnsetSideEffects("backup.enabled")
+	effects := unsetEffects(t, sideEffectStore(t, ""), "backup.enabled")
 	if len(effects) != 1 {
 		t.Fatalf("expected 1 effect, got %d", len(effects))
 	}
 }
 
 func TestCheckConfigUnsetSideEffects_UnknownKey(t *testing.T) {
-	effects := checkConfigUnsetSideEffects("some.random.key")
+	effects := unsetEffects(t, sideEffectStore(t, ""), "some.random.key")
 	if len(effects) != 0 {
 		t.Errorf("expected 0 effects for unknown key, got %d", len(effects))
 	}
