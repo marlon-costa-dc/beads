@@ -11,7 +11,9 @@ import (
 	"strings"
 
 	"github.com/steveyegge/beads/internal/ceiling"
+	"github.com/steveyegge/beads/internal/git"
 	"github.com/steveyegge/beads/internal/gitenv"
+	"github.com/steveyegge/beads/internal/utils"
 	"gopkg.in/yaml.v3"
 )
 
@@ -752,10 +754,20 @@ func findProjectBeadsDir() string {
 	}
 
 	bound := ceiling.For(cwd)
+	// The walk stops at the repository root; outside a repository only the
+	// current directory declares a store — an unrelated ancestor (for
+	// example a user-global ~/.beads) may own a different database.
+	root := git.GetRepoRoot()
+	if root == "" {
+		root = cwd
+	}
 	for dir := cwd; dir != filepath.Dir(dir) && !bound.Excludes(dir); dir = filepath.Dir(dir) {
 		beadsDir := filepath.Join(dir, ".beads")
 		if info, err := os.Stat(beadsDir); err == nil && info.IsDir() {
 			return beadsDir
+		}
+		if utils.PathsEqual(dir, root) {
+			break
 		}
 	}
 
