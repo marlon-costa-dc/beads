@@ -1807,10 +1807,10 @@ func TestGetStringFromDir(t *testing.T) {
 	})
 }
 
-// TestLookupStringFromDir verifies the error-returning variant: absence is
+// TestlookupStringFromDir verifies the error-returning variant: absence is
 // (found=false, nil), while unreadable or malformed input is an error rather
 // than an empty value.
-func TestLookupStringFromDir(t *testing.T) {
+func TestStringLookupFromDir(t *testing.T) {
 	writeConfig := func(t *testing.T, content string) string {
 		t.Helper()
 		dir := t.TempDir()
@@ -1831,9 +1831,9 @@ func TestLookupStringFromDir(t *testing.T) {
 	}
 	for _, tt := range found {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok, err := LookupStringFromDir(writeConfig(t, tt.body), tt.key)
+			got, ok, err := lookupStringFromDir(writeConfig(t, tt.body), tt.key)
 			if err != nil || !ok || got != tt.want {
-				t.Fatalf("LookupStringFromDir(%q) = (%q, %v, %v), want (%q, true, nil)", tt.key, got, ok, err, tt.want)
+				t.Fatalf("lookupStringFromDir(%q) = (%q, %v, %v), want (%q, true, nil)", tt.key, got, ok, err, tt.want)
 			}
 		})
 	}
@@ -1848,9 +1848,9 @@ func TestLookupStringFromDir(t *testing.T) {
 	}
 	for _, tt := range absent {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok, err := LookupStringFromDir(tt.dir(t), "dolt.auto-start")
+			got, ok, err := lookupStringFromDir(tt.dir(t), "dolt.auto-start")
 			if err != nil || ok || got != "" {
-				t.Fatalf("LookupStringFromDir = (%q, %v, %v), want (\"\", false, nil)", got, ok, err)
+				t.Fatalf("lookupStringFromDir = (%q, %v, %v), want (\"\", false, nil)", got, ok, err)
 			}
 		})
 	}
@@ -1864,9 +1864,9 @@ func TestLookupStringFromDir(t *testing.T) {
 	}
 	for _, tt := range broken {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, err := LookupStringFromDir(writeConfig(t, tt.body), tt.key)
+			_, _, err := lookupStringFromDir(writeConfig(t, tt.body), tt.key)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("LookupStringFromDir error = %v, want one containing %q", err, tt.wantErr)
+				t.Fatalf("lookupStringFromDir error = %v, want one containing %q", err, tt.wantErr)
 			}
 		})
 	}
@@ -1876,8 +1876,8 @@ func TestLookupStringFromDir(t *testing.T) {
 		if err := os.Mkdir(filepath.Join(dir, "config.yaml"), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := LookupStringFromDir(dir, "dolt.auto-start"); err == nil || !strings.Contains(err.Error(), "reading") {
-			t.Fatalf("LookupStringFromDir on a directory named config.yaml: err = %v, want a read error", err)
+		if _, _, err := lookupStringFromDir(dir, "dolt.auto-start"); err == nil || !strings.Contains(err.Error(), "reading") {
+			t.Fatalf("lookupStringFromDir on a directory named config.yaml: err = %v, want a read error", err)
 		}
 	})
 }

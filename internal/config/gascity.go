@@ -62,7 +62,7 @@ func ReadGasCityEndpointOrigin(beadsDir string) (GasCityEndpointOrigin, error) {
 	if beadsDir == "" {
 		return "", errors.New("resolving " + GasCityEndpointOriginKey + ": no .beads directory given")
 	}
-	raw, found, err := LookupStringFromDir(beadsDir, GasCityEndpointOriginKey)
+	raw, found, err := lookupStringFromDir(beadsDir, GasCityEndpointOriginKey)
 	if err != nil {
 		return "", fmt.Errorf("resolving %s: %w", GasCityEndpointOriginKey, err)
 	}
@@ -113,14 +113,14 @@ var gasCityCommandDefaults = map[string]string{
 }
 
 // GasCityCommand returns the configured city lifecycle command for key, one of
-// the GasCity*CommandKey constants. An unknown key or a value configured empty
-// is an error.
+// the GasCity*CommandKey constants. An absent key yields the declared default;
+// an unknown key or a value explicitly configured empty is an error.
 func GasCityCommand(key string) (string, error) {
 	def, ok := gasCityCommandDefaults[key]
 	if !ok {
 		return "", fmt.Errorf("unknown Gas City command key %q", key)
 	}
-	if v == nil {
+	if v == nil || !v.IsSet(key) {
 		return def, nil
 	}
 	command := v.GetString(key)
