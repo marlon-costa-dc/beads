@@ -69,6 +69,16 @@ Before adding new feature surface area, read
 primitives and should not encode orchestration-layer policy, become a storage
 engine, or casually expand the database schema when metadata would work.
 
+## Fork lane and language boundary
+
+This fork integrates on `dc-use` (rig `beads` in the Gas City at `~/gc`). Every change
+uses a dedicated worktree and a change branch cut from `origin/dc-use`, published with
+`git push -u origin <branch>` (the fresh branch's upstream starts as `dc-use`, so a
+bare `git push` is refused under `push.default=simple`), a PR against
+`dc-use`, and `merge --no-ff`; never rebase or force-push (`~/agents` ADR-0036 and
+`rules/coordination/flext-gascity-roe.md`). Code here is idiomatic Go
+validated by this repository's root Makefile; no flext/Python facade rule applies.
+
 ## PR Safety for Agents
 
 Before triaging, reviewing, landing, closing, or otherwise maintaining PRs, read
@@ -176,13 +186,13 @@ plane"), you MUST complete ALL steps below. Work is NOT complete until
 3. **Update issue status** - Close finished work, update in-progress items
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
-   git pull --rebase
+   git fetch origin
+   git merge --no-ff origin/dc-use   # integrate the lane; never rebase
    git push
    git status  # MUST show "up to date with origin"
    ```
 5. **Clean up**:
    ```bash
-   git stash clear                    # Remove old stashes
    git remote prune origin            # Clean up deleted remote branches
    ```
 6. **Verify** - All changes committed AND pushed, no untracked files remain
@@ -194,7 +204,9 @@ plane"), you MUST complete ALL steps below. Work is NOT complete until
 - Work is NOT complete until `git push` succeeds
 - NEVER stop before pushing - that leaves work stranded locally
 - NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
+- If push fails, it is red: report the exact error, integrate with
+  `git merge --no-ff origin/dc-use`, revalidate, and push again — never rebase or
+  force-push
 
 Close with a summary for the user: what was completed this session, issues
 filed for follow-up, quality-gate status, confirmation everything is pushed,
