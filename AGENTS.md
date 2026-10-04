@@ -72,7 +72,9 @@ engine, or casually expand the database schema when metadata would work.
 ## Fork lane and language boundary
 
 This fork integrates on `dc-use` (rig `beads` in the Gas City at `~/gc`). Every change
-uses a dedicated worktree and a change branch cut from `origin/dc-use`, a PR against
+uses a dedicated worktree and a change branch cut from `origin/dc-use`, published with
+`git push -u origin <branch>` (the fresh branch's upstream starts as `dc-use`, so a
+bare `git push` is refused under `push.default=simple`), a PR against
 `dc-use`, and `merge --no-ff`; never rebase or force-push (`~/agents` ADR-0036 and
 `rules/coordination/flext-gascity-roe.md`). Code here is idiomatic Go
 validated by this repository's root Makefile; no flext/Python facade rule applies.
