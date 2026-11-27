@@ -522,10 +522,10 @@ func testHookProcessRealPerlStatuses(t *testing.T) {
 		wantDBWarning bool
 	}{
 		{name: "success continues", bdExit: 0},
-		{name: "database-not-initialized is skipped", bdExit: 3, wantDBWarning: true},
+		{name: "foreign exit 3 is preserved", bdExit: 3, wantExit: 3},
 		{name: "other status is preserved", bdExit: 37, wantExit: 37},
 		{name: "124 is preserved", bdExit: 124, wantExit: 124},
-		{name: "142 is reported as a timeout", bdExit: 142, wantWarning: true},
+		{name: "142 is reported as a timeout", bdExit: 142, wantExit: 142, wantWarning: true},
 		{name: "death by SIGKILL is reported as 137", bdBody: hookProcessKilledBDStub, wantExit: 137},
 	}
 	for _, tt := range tests {
