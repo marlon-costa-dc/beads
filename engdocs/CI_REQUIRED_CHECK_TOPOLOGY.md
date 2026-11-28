@@ -68,8 +68,12 @@ Current PR-related workflow names:
   "rbe-cache", GitHub-hosted runners; every lane's `runs-on` is Blacksmith
   in modes `remote` and `cache`); or `skip` while the `RBE_WEST_WORKERS`
   repo variable is unset) and exports it as the `rbe-mode` / `rbe-enabled`
-  outputs (`rbe-enabled` is `true` in `remote`, `fork-ro` and `fork-rw`);
-  every lane exports its
+  outputs (`rbe-enabled` is `true` in `remote`, `fork-ro` and `fork-rw`).
+  Only `marlon-costa-dc/beads` additionally exports `full-local: true`
+  with mode `local` and `rbe-enabled: false`, enabling every required local
+  tier (see [Fork Local Execution](#fork-local-execution)); other local
+  runs retain upstream's partial execution policy.
+  Every lane exports its
   `job.status` as an output named after the job (in mode `remote`, the
   `bazel-doltserver` and `bazel-proxied` outputs carry the `bazel-dolt-race`
   union job's status instead, see [dolt-race Union Lane](#dolt-race-union-lane);
@@ -87,22 +91,26 @@ Current PR-related workflow names:
   test tiers: the legacy jobs they mirrored in `pr.yml` and `pr-risk.yml`
   are retired (ga-96smfk.22; see
   [Legacy Tier Retirement](#legacy-tier-retirement-d2)), so the gate also
-  requires `BAZEL_REMOTE`: the call's mode must be `remote`, `fork-ro` or
-  `fork-rw`. `.github/scripts/bazel-gate.sh` reads the exported mode, never
-  the variable or the fork flag: mode `skip` allows every Bazel id to skip,
-  mode `cache` (`rbe=cache` dispatches) the remote-only `BAZEL_EMBEDDED`,
-  `BAZEL_PROXIED` and `BAZEL_SERVER_STORAGE`, mode `local` (`rbe=off`
-  dispatches, fork and Dependabot PRs while rbe-fork is closed, a fork
-  repository's own CI) those and `BAZEL_INTEGRATION`, and modes `remote`, `fork-ro` and `fork-rw` none;
-  on `pr.yml` the first three are red anyway through `BAZEL_REMOTE`.
+  requires `BAZEL_EXECUTION`: upstream calls must report mode `remote`,
+  `fork-ro` or `fork-rw`; this fork may instead report the explicit
+  `full-local: true` decision with mode `local` and `rbe-enabled: false`.
+  `.github/scripts/bazel-gate.sh` reads those exported decisions, never
+  re-derives them from the variable or fork flag. Mode `skip` allows every
+  Bazel id to skip; mode `cache` (`rbe=cache` dispatches) allows
+  `BAZEL_EMBEDDED`, `BAZEL_PROXIED` and `BAZEL_SERVER_STORAGE` to skip;
+  mode `local` without `full-local` also allows `BAZEL_INTEGRATION` and
+  `BAZEL_CMD_DOLT` to skip. Remote modes and full-local execution excuse
+  no execution-mode skips. On `pr.yml`, skip, cache and partial-local
+  execution remain red through `BAZEL_EXECUTION`.
   A lane that should run and fails, is cancelled, or reports no result fails
   the gate, and so does a missing or invalid mode.
   `bazel-integration` (`bazel test //... --config=integration`, the Bazel
   successor of `main.yml`'s former Linux integration shards) is required on every PR:
   `pr.yml` passes `integration: "on"` (policy-pinned), so it runs in modes
   `remote` (same-repo PRs) and `fork-ro`/`fork-rw` (fork and Dependabot PRs
-  while rbe-fork is open), and in mode `cache` (`rbe=cache` dispatches,
-  locally on the Blacksmith runner with the read-only cache), and a
+  while rbe-fork is open), in this fork's full-local execution, and in
+  mode `cache` (`rbe=cache` dispatches, locally on the Blacksmith runner
+  with the read-only cache), and a
   failure, cancellation or missing result turns the gate red. Its legacy
   twins still run only on push to `main`, so this lane is the only PR-time
   run of the full integration-tagged suite. In mode `cache` every action
@@ -111,9 +119,10 @@ Current PR-related workflow names:
   minutes warm, 3 to 5 for a `cmd/bd` change, and about 30 with the cache
   closed. Its step timeout (75 minutes) covers that cold local run with
   room to spare, and so also a remote cold compile plus the 1200 s
-  per-action cap (both policy-tested). Mode `local` (`rbe=off`; fork and
-  Dependabot PRs while rbe-fork is closed, red anyway through
-  `BAZEL_REMOTE`) skips it.
+  per-action cap (both policy-tested). This fork's full-local execution
+  has the larger explicit budgets below. Mode `local` without full-local
+  (`rbe=off`; fork and Dependabot PRs into upstream while rbe-fork is
+  closed, red anyway through `BAZEL_EXECUTION`) skips it.
   `scripts/ci_workflow_test.go` fails when a new `bazel.yml` job has neither
   a gate id nor an advisory entry.
   Runbook: if `main`'s Bazel BUILD files drift (every PR's Bazel lanes go
@@ -122,8 +131,9 @@ Current PR-related workflow names:
   2027-09-27; a partial secret set also fails every same-repo run), fix
   `main` (`make bazel-sync`) or renew the secrets. There is no legacy tier
   to fall back to: unsetting the `RBE_WEST_WORKERS` repo variable (mode
-  `skip`) turns `CI Gate / Required` red on every PR and merge group
-  (`BAZEL_REMOTE`), by design. If rbe-west closes the read-only cache (the
+  `skip`) turns `CI Gate / Required` red on upstream PRs and merge groups
+  (`BAZEL_EXECUTION`), by design. This fork's full-local decision uses no
+  upstream executor or cache credential. If rbe-west closes the read-only cache (the
   farm's kill switch; the client has none), runs in mode `cache`
   (`rbe=cache` dispatches) execute locally. If it
   is slow rather than closed, each lookup gives up after `fork-cache`'s
@@ -237,6 +247,46 @@ be up to date (strict off). Both workflows are merge-queue ready (see
 step. The ruleset applies to the default branch only: PRs into
 `release/**` run both workflows (and the Bazel lane), but neither gate is
 enforced there.
+
+## Fork Local Execution
+
+Fork policy revision: 1.0 — 2026-11-28 — Marlon Costa
+<marlon.costa@datacosmos.com.br>.
+
+Only runs whose `GITHUB_REPOSITORY` is `marlon-costa-dc/beads` receive
+`full-local: true` from `bazel.yml`'s `rbe` decision. The mode remains
+`local`, and `rbe-enabled` remains `false`: this is explicit execution on
+GitHub-hosted runners, without upstream RBE or cache credentials. PRs
+from this fork into `gastownhall/beads` still follow upstream's RBE
+policy because their workflow repository is upstream.
+
+The base local lanes (`bazel-test`, `bazel-pure`, `bazel-release-cross`
+and `bazel-doltserver`) continue to run. Full-local also runs the five
+lanes that partial-local execution omits, with unchanged test targets,
+configs and shard manifests. Cold builds and sequential shard waves have
+explicit larger budgets:
+
+| Lane | Bazel config | Test-step timeout | Job timeout |
+|---|---|---|---|
+| `bazel-embedded` | `embedded` | 270 minutes | 300 minutes |
+| `bazel-integration` | `integration` | 165 minutes | 180 minutes |
+| `bazel-proxied` | `doltserver-proxied` | 165 minutes | 180 minutes |
+| `bazel-server-storage` | `doltserver-integration` | 165 minutes | 180 minutes |
+| `bazel-cmd-dolt` | `doltserver-cmd` | 165 minutes | 180 minutes |
+
+Upstream's timeouts and remote union lanes are unchanged. A timeout still
+fails the corresponding lane; the larger budget does not turn a timeout
+or incomplete run into success.
+
+`pr.yml` forwards the decision as `BAZEL_FULL_LOCAL`.
+`bazel-gate.sh execution` accepts it only with the consistent
+`local`/`false` mode/enabled pair and returns the `BAZEL_EXECUTION`
+result. That token confirms the execution policy, not the test results:
+the aggregate separately requires every applicable lane's reported result
+and rejects failure, cancellation, a missing result or an unexpected skip.
+Full-local excuses no execution-mode skip. The existing merge-group
+Dolt-tier exemption still requires both the scope and the call to report
+`dolt-tiers: off`; either half alone excuses nothing.
 
 ## Trusted-Author Fork PRs (Bazel Farm)
 
@@ -1264,9 +1314,10 @@ intentionally absent for that event or risk tier:
 - (Historical: `CHECK_NO_BEADS_CHANGES=skipped` was accepted on
   `merge_group` while the step was PR-only. It now runs on `merge_group`
   too, against `merge_group.base_sha`, and no skip of it is excused.)
-- In the baseline aggregate, `BAZEL_REMOTE` is red unless the Bazel call
-  ran in mode `remote`, `fork-ro` or `fork-rw` (its lanes are the only run
-  of the Linux Go test tiers), whatever `bazel-gate.sh` lets skip.
+- In the baseline aggregate, `BAZEL_EXECUTION` requires remote mode
+  (`remote`, `fork-ro` or `fork-rw`) or this fork's explicit full-local
+  decision. Its lanes are the only run of the Linux Go test tiers. Partial
+  local, cache and skip modes remain red, whatever `bazel-gate.sh` lets skip.
 - All baseline jobs must be `success`.
 
 This keeps branch protection pointed at stable aggregate jobs while preserving
@@ -1329,7 +1380,9 @@ committed flag (column 4) and a `bazel-coverage` decision job chose, per
 PR, between the legacy jobs and the lanes; every PR and merge group took the
 lanes (forks too, since `BAZEL_COVERS_FORKS`, ga-96smfk.15), so the legacy
 jobs, the flags, the decision and its `BAZEL_*_RETIRED` gate ids were
-removed and replaced by one gate id, `BAZEL_REMOTE`. The parity tests
+removed and replaced by one execution gate, now named `BAZEL_EXECUTION`.
+It preserves upstream's remote-only policy and also accepts this fork's
+complete local execution decision. The parity tests
 (`TestBazelEmbeddedJobRunsEmbeddedTier`, `TestBazelDoltServerTiers`,
 `TestBazelPureJobMirrorsPureGoJob`) now pin the lanes against the retired
 jobs' frozen commands.
@@ -1479,11 +1532,12 @@ Required` requires them to have run remotely and passed.
 - Gate: on every `pull_request` and `merge_group` run (same-repo, fork and
   Dependabot alike; merge groups run on this repository's
   `gh-readonly-queue/*` branch with the CI secrets) `pr.yml`'s gate requires
-  `BAZEL_REMOTE` (the call's mode is `remote`, `fork-ro` or `fork-rw`) and
-  every lane's own id (a merge group every lane's but the Dolt tiers', which
-  main's push run runs: see [Merge Queue](#merge-queue)). Mode `skip` (the farm switch off) and mode `local`
-  (the executor secret missing, or rbe-fork closed or refusing a fork run)
-  are red, never a silent pass with fewer tests.
+  `BAZEL_EXECUTION` (upstream's remote modes or this fork's full-local
+  decision) and every lane's own id (a merge group every lane's but the
+  Dolt tiers', which main's push run runs: see [Merge Queue](#merge-queue)).
+  Mode `skip` (the farm switch off) and partial mode `local` (the executor
+  secret missing, or rbe-fork closed or refusing a fork run) remain red.
+  Full-local execution runs the same required tiers and excuses no extra skips.
   `scripts/pr_risk_bazel_coverage_test.go`
   (`TestPRGateRequiresRemoteBazelLanes`) runs `bazel.yml`'s actual `rbe`
   step and `pr.yml`'s actual gate step over every event, variable value,
@@ -1948,9 +2002,11 @@ workflows run on that commit like a same-repo PR, but only the fast set.
   exactly as before merging.** A ruleset `pull_request` rule (1 approval,
   approval of the most recent push) would enforce a review before queueing.
   That decision is pending.
-- The gate requires the fast set's Bazel lanes to have run remotely and
-  passed (`BAZEL_REMOTE`), exactly as on a PR: with the farm switch off
-  (mode `skip`) or a missing executor secret (mode `local`) it is red.
+- The gate requires the fast set's Bazel lanes to pass and
+  `BAZEL_EXECUTION` to accept their execution decision, exactly as on a PR.
+  Upstream still requires remote execution: with the farm switch off
+  (mode `skip`) or a missing executor secret (partial mode `local`) it is
+  red. This fork uses its full-local decision with the same scope rules.
   `bazel-integration` and the package gates run as on a PR. The Dolt-tier
   ids (`BAZEL_EMBEDDED`, `BAZEL_DOLTSERVER`, `BAZEL_PROXIED`,
   `BAZEL_SERVER_STORAGE`, `BAZEL_CMD_DOLT`) may skip only because
@@ -2034,10 +2090,12 @@ Caveats:
   content-addressed, so serial seeding loses nothing). Not done here: a
   key GitHub rejected in `bazel.yml` would fail every pull request's call
   at startup.
-- Mode `remote`. The complement assumes `bazel.yml`'s push run takes mode
-  `remote`, as the merge group did (its gate requires it, `BAZEL_REMOTE`).
-  A push run in mode `skip` (the farm switch turned off) runs no lane, and
-  one in mode `local` (the executor secret gone) skips the remote-only
+- Upstream mode `remote`. The upstream complement assumes `bazel.yml`'s
+  push run takes mode `remote`, as its merge group did (required there by
+  `BAZEL_EXECUTION`). This fork instead keeps its full-local decision on
+  both events. An upstream push run in mode `skip` (the farm switch turned
+  off) runs no lane, and one in partial mode `local` (the executor secret
+  gone) skips the remote-only
   tiers and integration; both stay green on what they skipped. Only a change of the switch
   or the secret between a merge group and its push gets there.
 

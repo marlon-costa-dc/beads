@@ -36,7 +36,7 @@ const (
 	// execution only), minus mode remote (and, in their actual ifs, plus the
 	// dolt-tiers switch).
 	bazelDoltMemberIf    = "${{ needs.rbe.outputs.mode != 'skip' && needs.rbe.outputs.mode != 'remote' }}"
-	bazelProxiedMemberIf = "${{ needs.rbe.outputs.enabled == 'true' && needs.rbe.outputs.mode != 'remote' }}"
+	bazelProxiedMemberIf = "${{ (needs.rbe.outputs.enabled == 'true' || needs.rbe.outputs.full-local == 'true') && needs.rbe.outputs.mode != 'remote' }}"
 )
 
 // bazelDoltRaceJobs is the union's own --jobs: remote exec's 64 plus the 6

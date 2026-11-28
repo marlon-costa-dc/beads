@@ -98,7 +98,7 @@ var ciScopeGateIDs = map[string]map[string][]string{
 		"platforms": {"TEST_WINDOWS_LIVENESS", "WORKTREE_REMOVE_WINDOWS", "CHECK_DOC_FRESHNESS_PLATFORMS", "PR_PREFLIGHT_PLATFORMS", "WINDOWS_MAKE_SHELL"},
 		"linux": {"FAST_CHECKS", "CHECK_MIGRATION_HYGIENE", "CHECK_NO_BEADS_CHANGES", "CHECK_DOC_FLAGS", "PACKAGE_MCP", "PACKAGE_NPM",
 			"BAZEL", "BAZEL_TEST", "BAZEL_PURE", "BAZEL_RELEASE_CROSS", "BAZEL_EMBEDDED", "BAZEL_INTEGRATION",
-			"BAZEL_DOLTSERVER", "BAZEL_PROXIED", "BAZEL_SERVER_STORAGE", "BAZEL_CMD_DOLT", "BAZEL_REMOTE"},
+			"BAZEL_DOLTSERVER", "BAZEL_PROXIED", "BAZEL_SERVER_STORAGE", "BAZEL_CMD_DOLT", "BAZEL_EXECUTION"},
 	},
 	prRiskWorkflowName: {"platforms": {"TEST_NIX"}},
 }
@@ -413,7 +413,7 @@ type prGateSetter struct {
 }
 
 // prGateSetters: for every id pr.yml's gate reads from a job (not SCOPE,
-// BAZEL or BAZEL_REMOTE, which its run script derives), how a scenario sets
+// BAZEL or BAZEL_EXECUTION, which its run script derives), how a scenario sets
 // that job's result. A skipped Bazel lane or fast-checks step reports no
 // output. A lane that runs in neither arm of its union in this mode "runs
 // anyway" as the arm the mode would pick (the union in mode remote).
@@ -775,20 +775,20 @@ func TestBazelGateDoltTiersCrossCheck(t *testing.T) {
 		aggregate, remote         string
 	}{
 		{"call never started", "skipped", "", "", "skipped", "skipped"},
-		{"rbe job failed", "failure", "", "", "invalid-rbe-mode:/", "not-run-remotely"},
-		{"call cancelled before the decision", "cancelled", "", "", "invalid-rbe-mode:/", "not-run-remotely"},
+		{"rbe job failed", "failure", "", "", "invalid-rbe-mode:/", "incomplete-execution"},
+		{"call cancelled before the decision", "cancelled", "", "", "invalid-rbe-mode:/", "incomplete-execution"},
 		{"remote", "success", "remote", "true", "success", "success"},
 		{"fork-ro", "success", "fork-ro", "true", "success", "success"},
-		{"cache", "success", "cache", "false", "success", "not-run-remotely"},
-		{"skip", "success", "skip", "false", "success", "not-run-remotely"},
-		{"inconsistent", "success", "remote", "false", "invalid-rbe-mode:remote/false", "not-run-remotely"},
+		{"cache", "success", "cache", "false", "success", "incomplete-execution"},
+		{"skip", "success", "skip", "false", "success", "incomplete-execution"},
+		{"inconsistent", "success", "remote", "false", "invalid-rbe-mode:remote/false", "incomplete-execution"},
 		{"skipped with a mode", "skipped", "remote", "true", "skipped", "success"},
 	} {
 		env := map[string]string{"BAZEL_CALL": c.call, "BAZEL_RBE_MODE": c.mode, "BAZEL_RBE_ENABLED": c.enabled}
 		if got := run("aggregate", env); got != c.aggregate {
 			t.Errorf("%s: aggregate %q, want %q", c.name, got, c.aggregate)
 		}
-		if got := run("remote", env); got != c.remote {
+		if got := run("execution", env); got != c.remote {
 			t.Errorf("%s: remote %q, want %q", c.name, got, c.remote)
 		}
 		if c.name == "call never started" {
