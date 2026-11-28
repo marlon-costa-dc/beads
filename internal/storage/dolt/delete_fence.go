@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"hash/fnv"
 	"time"
+
+	"github.com/steveyegge/beads/internal/storage/issueops"
 )
 
 const (
@@ -80,28 +82,37 @@ func deleteFenceLockName(databaseName, id string) string {
 // write, and RELEASE_LOCK all on one *sql.Conn (via withRetryTxOn) is the
 // same contract schema.MigrateUpWithLock documents for migrations.
 //
-// This also means withDeleteFence must never be called when the store's pool
-// could be sized to a single connection (see dolt_test.go's setupTestStore,
-// which pins MaxOpenConns to 1 because DOLT_CHECKOUT is session-level): a
-// second, pool-sourced connection for the write would then never be
-// grantable while this fence holds the only one. Pinning ONE connection for
-// both the lock and the write (rather than a lock connection plus a
-// pool-sourced write connection) avoids that deadlock by construction —
-// the fenced write never needs a second connection at all.
+// The fence and the write share one connection even when MaxOpenConns is 1
+// (setupTestStore requires this because DOLT_CHECKOUT is session-level).
+// Once the write commits, the next guarded delete can observe its durable
+// result, so the fence can be released. The pinned connection must also be
+// returned before the post-commit recheck opens a fresh transaction through
+// the pool; otherwise that repair waits for the connection this call holds.
 func (s *DoltStore) withDeleteFence(ctx context.Context, id string, fn func(tx *sql.Tx) error) error {
+	pending, err := s.commitWithDeleteFence(ctx, id, fn)
+	if err != nil {
+		return err
+	}
+	s.settleBlockedRecheck(ctx, pending)
+	return nil
+}
+
+// commitWithDeleteFence holds the lock through the retried write's commit,
+// then releases the lock and connection before handing the recheck back.
+func (s *DoltStore) commitWithDeleteFence(ctx context.Context, id string, fn func(tx *sql.Tx) error) (issueops.BlockedRecheck, error) {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
-		return fmt.Errorf("delete fence: acquire connection: %w", err)
+		return issueops.BlockedRecheck{}, fmt.Errorf("delete fence: acquire connection: %w", err)
 	}
 	defer conn.Close()
 
 	lockName := deleteFenceLockName(s.database, id)
 	var locked sql.NullInt64
 	if err := conn.QueryRowContext(ctx, "SELECT GET_LOCK(?, ?)", lockName, deleteFenceLockTimeoutSeconds).Scan(&locked); err != nil {
-		return fmt.Errorf("delete fence: acquire lock: %w: %w", ErrDeleteFenceUnavailable, err)
+		return issueops.BlockedRecheck{}, fmt.Errorf("delete fence: acquire lock: %w: %w", ErrDeleteFenceUnavailable, err)
 	}
 	if !locked.Valid || locked.Int64 != 1 {
-		return fmt.Errorf("delete fence: acquire lock: %w: timed out after %ds", ErrDeleteFenceUnavailable, deleteFenceLockTimeoutSeconds)
+		return issueops.BlockedRecheck{}, fmt.Errorf("delete fence: acquire lock: %w: timed out after %ds", ErrDeleteFenceUnavailable, deleteFenceLockTimeoutSeconds)
 	}
 	defer releaseDeleteFenceLock(conn, lockName)
 

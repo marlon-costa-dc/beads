@@ -184,7 +184,8 @@ func TestCloseRecheckBlocked_PublicClosePaths(t *testing.T) {
 // is landed from inside the runner's body — before the runner commits, after
 // its snapshot was taken. Only a recheck on a fresh snapshot can settle the
 // dependent from there. withRetryTx and withWriteTx carry separate tail calls,
-// so each gets its own arm and its own fixture.
+// so each gets its own arm and its own fixture. The delete-fence arm also
+// requires the pinned connection to be returned before the recheck begins.
 func TestCloseRecheckBlocked_RunnerTailRechecksACommittedWrite(t *testing.T) {
 	store, cleanup := setupConcurrentTestStore(t)
 	defer cleanup()
@@ -200,6 +201,22 @@ func TestCloseRecheckBlocked_RunnerTailRechecksACommittedWrite(t *testing.T) {
 	}{
 		{"withRetryTx", store.withRetryTx, "rt-a", "rt-b", "rt-c"},
 		{"withWriteTx", store.withWriteTx, "wt-a", "wt-b", "wt-c"},
+		{
+			"withDeleteFence",
+			func(ctx context.Context, fn func(*sql.Tx) error) error {
+				return store.withDeleteFence(ctx, "df-b", func(tx *sql.Tx) error {
+					if err := fn(tx); err != nil {
+						return err
+					}
+					// The sibling has committed and returned its connection.
+					// Leave only the fence's connection available, as on a
+					// branch-isolated store: its recheck must reuse that slot.
+					store.db.SetMaxOpenConns(1)
+					return nil
+				})
+			},
+			"df-a", "df-b", "df-c",
+		},
 	} {
 		t.Run(arm.runner, func(t *testing.T) {
 			seedSiblingBlockersAs(t, ctx, store, arm.racing, arm.committed, arm.dependent)

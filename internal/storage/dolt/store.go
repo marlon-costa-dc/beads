@@ -1364,7 +1364,12 @@ func (s *DoltStore) withReadTxLongTimeout(ctx context.Context, fn func(tx *sql.T
 // logic (verify passes, hooks, return values). See ready_claimer.ClaimNext's
 // `claimed = nil` reset for the canonical example.
 func (s *DoltStore) withRetryTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
-	return s.withRetryTxOn(ctx, s.db, fn)
+	pending, err := s.withRetryTxOn(ctx, s.db, fn)
+	if err != nil {
+		return err
+	}
+	s.settleBlockedRecheck(ctx, pending)
+	return nil
 }
 
 // withRetryTxOn is withRetryTx against a caller-chosen txBeginner instead of
@@ -1373,13 +1378,15 @@ func (s *DoltStore) withRetryTx(ctx context.Context, fn func(tx *sql.Tx) error) 
 // see withDeleteFence. Every retried attempt replays on that SAME connection,
 // which is required: txBeginner's one other implementer, *sql.Conn, is itself
 // the pinned session, there is no pool to hand back a different one.
-func (s *DoltStore) withRetryTxOn(ctx context.Context, beginner txBeginner, fn func(tx *sql.Tx) error) error {
+// The caller releases any pinned connection before settling the returned
+// post-commit recheck, which opens its own transaction through the pool.
+func (s *DoltStore) withRetryTxOn(ctx context.Context, beginner txBeginner, fn func(tx *sql.Tx) error) (issueops.BlockedRecheck, error) {
 	// Keep circuit admission at the transaction retry boundary. Calling
 	// withRetry from here would multiply retries and could replay a write after
 	// an indeterminate commit.
 	if !circuitWriteManaged(ctx) && s.breaker != nil && !s.breaker.Allow() {
 		doltMetrics.circuitRejected.Add(ctx, 1)
-		return ErrCircuitOpen
+		return issueops.BlockedRecheck{}, ErrCircuitOpen
 	}
 
 	bo := backoff.NewExponentialBackOff()
@@ -1435,10 +1442,9 @@ func (s *DoltStore) withRetryTxOn(ctx context.Context, beginner txBeginner, fn f
 		}
 		return backoff.Permanent(err)
 	}, backoff.WithContext(bo, ctx)); err != nil {
-		return err
+		return issueops.BlockedRecheck{}, err
 	}
-	logBlockedRecheckFailure(ctx, pending, s.recheckBlockedAfterCommit(ctx, pending))
-	return nil
+	return pending, nil
 }
 
 func (s *DoltStore) withWriteTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
