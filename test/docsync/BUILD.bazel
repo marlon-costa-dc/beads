@@ -18,6 +18,7 @@ go_test(
     # a file outside these fails under Bazel; declare the file here.
     data = [
         "//:.github/workflows/bazel.yml",
+        "//:.github/workflows/upstream-sync.yml",
         "//:.golangci.yml",
         "//:beads.go",
         "//:docs/docs.json",

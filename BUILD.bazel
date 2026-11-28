@@ -119,6 +119,7 @@ filegroup(
 exports_files(
     [
         ".github/workflows/bazel.yml",
+        ".github/workflows/upstream-sync.yml",
         "beads.go",
         "docs/docs.json",
     ],
