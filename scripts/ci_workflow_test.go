@@ -2434,7 +2434,7 @@ func TestSameRepoBlacksmithRunners(t *testing.T) {
 		// is cheap enough to size at 2 vCPU per spec-f7.md §2.2) and moves
 		// to Blacksmith for same-repo PRs/merge_group only; forks,
 		// Dependabot and push stay on ubuntu-latest.
-		"docs-mintlify.yml": {"broken-links": strings.Replace(sameRepoBlacksmith2vcpu, "github.repository == 'gastownhall/beads' && ", "", 1)},
+		"docs-mintlify.yml": {"broken-links": sameRepoBlacksmith2vcpu},
 		// main.yml's push-to-main-only jobs. Tracked here so the "no other
 		// Blacksmith label leaks" sweep below also covers main.yml.
 		"main.yml": {
