@@ -7,7 +7,9 @@ go_test(
         "database_corruption_recovery_test.go",
         "docsync_test.go",
         "doltpin_test.go",
+        "export_contract_test.go",
         "init_safety_recovery_test.go",
+        "schema_encoding_drift_recovery_test.go",
     ],
     # Every Markdown file (the docs trees, the root docs, every AGENTS.md),
     # every Go test file (the guard-test names the agent instructions cite),
@@ -16,6 +18,7 @@ go_test(
     # a file outside these fails under Bazel; declare the file here.
     data = [
         "//:.github/workflows/bazel.yml",
+        "//:.github/workflows/upstream-sync.yml",
         "//:.golangci.yml",
         "//:beads.go",
         "//:docs/docs.json",
@@ -27,6 +30,8 @@ go_test(
         "//cmd/bd:label.go",
         "//cmd/bd:main.go",
         "//cmd/bd:state.go",
+        "//internal/storage/schema:dirty_tables_error.go",
+        "//internal/storage/schema:encoding_drift.go",
         "//internal/testutil:testdoltcommon.go",
         "//scripts:bump-version.sh",
         "//scripts:check-cli-docs-drift.sh",

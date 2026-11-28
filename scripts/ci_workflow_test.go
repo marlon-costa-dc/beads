@@ -1989,7 +1989,7 @@ var bazelAdvisoryLanes = map[string]string{
 // caller passes integration: "off" (pr.yml and bazel-farm.yml pass "on"). A
 // string input: on push and dispatch it is null, and null != 'off', so the
 // lane keeps running on main.
-const bazelIntegIf = "${{ (needs.rbe.outputs.enabled == 'true' || needs.rbe.outputs.mode == 'cache') && inputs.integration != 'off' }}"
+const bazelIntegIf = "${{ (needs.rbe.outputs.enabled == 'true' || needs.rbe.outputs.full-local == 'true' || needs.rbe.outputs.mode == 'cache') && inputs.integration != 'off' }}"
 
 // bazelServerStorageIf: like bazelIntegIf, bazel-server-storage honors the
 // `integration` input (an explicit "off" skips it too, gastownhall/beads
@@ -1999,13 +1999,13 @@ const bazelIntegIf = "${{ (needs.rbe.outputs.enabled == 'true' || needs.rbe.outp
 // there bazel-dolt-int runs this tier instead (item 5 A2,
 // bazel_dolt_int_test.go). The job's actual if adds the caller's dolt-tiers
 // switch, as every Dolt-tier lane's does (withDoltTiers).
-const bazelServerStorageIf = "${{ needs.rbe.outputs.enabled == 'true' && needs.rbe.outputs.mode != 'remote' && inputs.integration != 'off' }}"
+const bazelServerStorageIf = "${{ (needs.rbe.outputs.enabled == 'true' || needs.rbe.outputs.full-local == 'true') && needs.rbe.outputs.mode != 'remote' && inputs.integration != 'off' }}"
 
 // bazelCmdDoltMemberIf: bazel-cmd-dolt's pre-union rule (bazelIntegIf) minus
 // mode remote, where bazel-dolt-int runs this tier instead (item 5 A2,
 // bazel_dolt_int_test.go); its actual if adds the dolt-tiers switch
 // (withDoltTiers).
-const bazelCmdDoltMemberIf = "${{ (needs.rbe.outputs.enabled == 'true' || needs.rbe.outputs.mode == 'cache') && inputs.integration != 'off' && needs.rbe.outputs.mode != 'remote' }}"
+const bazelCmdDoltMemberIf = "${{ (needs.rbe.outputs.enabled == 'true' || needs.rbe.outputs.full-local == 'true' || needs.rbe.outputs.mode == 'cache') && inputs.integration != 'off' && needs.rbe.outputs.mode != 'remote' }}"
 
 // F3: package-mcp and package-npm's if. Unlike every other lane's, it does
 // not read the rbe job's outputs at all - only the caller's package-gates
@@ -2211,7 +2211,7 @@ func TestBazelWorkflowJobsAndExecutionMode(t *testing.T) {
 	// on a GitHub-hosted runner, for tests the Go jobs already run there)
 	// skip unless remote.
 	const wantIf = "${{ needs.rbe.outputs.mode != 'skip' }}"
-	const wantRemoteOnlyIf = "${{ needs.rbe.outputs.enabled == 'true' }}"
+	const wantRemoteOnlyIf = "${{ (needs.rbe.outputs.enabled == 'true' || needs.rbe.outputs.full-local == 'true') }}"
 	gate := "needs.rbe.outputs.mode == 'remote' && "
 	// The package gates' setup-bazel (mode remote only, see
 	// bazelPackageRunsOn): the secrets, never a fork certificate.
@@ -2269,6 +2269,7 @@ func TestBazelWorkflowJobsAndExecutionMode(t *testing.T) {
 		if bazelPackageJobs[name] {
 			wantJobRunsOn, wantJobIf, wantJobSetupEnv = bazelPackageRunsOn[name], bazelPackageGatesIf, wantPackageSetupEnv
 		} else if bazelRemoteOnlyJobs[name] {
+			wantJobRunsOn = bazelFullLocalRunsOn
 			wantJobIf = wantRemoteOnlyIf
 			if name == bazelServerJobName {
 				// Remote-only like bazel-embedded/bazel-proxied, but also
@@ -2433,7 +2434,7 @@ func TestSameRepoBlacksmithRunners(t *testing.T) {
 		// is cheap enough to size at 2 vCPU per spec-f7.md §2.2) and moves
 		// to Blacksmith for same-repo PRs/merge_group only; forks,
 		// Dependabot and push stay on ubuntu-latest.
-		"docs-mintlify.yml": {"broken-links": strings.Replace(sameRepoBlacksmith2vcpu, "github.repository == 'gastownhall/beads' && ", "", 1)},
+		"docs-mintlify.yml": {"broken-links": sameRepoBlacksmith2vcpu},
 		// main.yml's push-to-main-only jobs. Tracked here so the "no other
 		// Blacksmith label leaks" sweep below also covers main.yml.
 		"main.yml": {
@@ -2665,6 +2666,7 @@ func TestPRPolicyChecksRunAsBazelTargets(t *testing.T) {
 		{"scripts/repochecks/BUILD.bazel", "build_tags_test", `"scripts/check-build-tags.sh"`, ""},
 		{"scripts/repochecks/BUILD.bazel", "workflow_tags_test", `"$(rlocationpath //scripts/checkworkflowtags)"`, ""},
 		{"scripts/repochecks/BUILD.bazel", "go_install_guidance_test", `"scripts/check-go-install-guidance.sh"`, ""},
+		{"scripts/repochecks/BUILD.bazel", "legacy_repo_refs_test", `"scripts/check-legacy-repo-refs.sh"`, ""},
 		{"scripts/repochecks/BUILD.bazel", "winget_portable_alias_test", `"scripts/check-winget-portable-alias.sh"`, ""},
 		{"scripts/repochecks/BUILD.bazel", "migration_hygiene_test", `"MIGRATION_HYGIENE_SCOPE": "tree"`, ""},
 		{"scripts/repochecks/BUILD.bazel", "fmt_test", `"scripts/ci/fmt-check.sh"`, ""},
@@ -2885,6 +2887,7 @@ func TestBazelLaneIsGated(t *testing.T) {
 	wantCallOutputs := map[string]string{
 		"rbe-enabled": "${{ jobs." + bazelRBEJobName + ".outputs.enabled }}",
 		"rbe-mode":    "${{ jobs." + bazelRBEJobName + ".outputs.mode }}",
+		"full-local":  "${{ jobs." + bazelRBEJobName + ".outputs.full-local }}",
 		// What the call ran: the Dolt-tier lanes or not
 		// (TestBazelDoltTiersInput, bazel-gate.sh's cross-check).
 		"dolt-tiers": bazelDoltTiersOutput,
@@ -3063,7 +3066,7 @@ func TestBazelLaneIsGated(t *testing.T) {
 		t.Errorf("ci-gate needs = %v, want bazel", gate.Needs)
 	}
 	// Plus the remote-execution check (TestPRGateRequiresRemoteBazelLanes).
-	wantBazelIDs := []string{bazelAggregateGateID, bazelRemoteGateID}
+	wantBazelIDs := []string{bazelAggregateGateID, bazelExecutionGateID}
 	for lane, id := range bazelLaneGateIDs {
 		// F3: package-mcp/package-npm's ids (PACKAGE_MCP, PACKAGE_NPM) do not
 		// follow the "BAZEL" naming convention the prefix filter below
@@ -3122,6 +3125,7 @@ func TestBazelLaneIsGated(t *testing.T) {
 		"BAZEL_CALL":        "${{ needs.bazel.result }}",
 		"BAZEL_RBE_MODE":    "${{ needs.bazel.outputs.rbe-mode }}",
 		"BAZEL_RBE_ENABLED": "${{ needs.bazel.outputs.rbe-enabled }}",
+		"BAZEL_FULL_LOCAL":  "${{ needs.bazel.outputs.full-local }}",
 	} {
 		if evaluate.Env[key] != want {
 			t.Errorf("ci-gate env %s = %q, want %q", key, evaluate.Env[key], want)
@@ -3235,7 +3239,7 @@ func bazelLaneRunModes(t *testing.T, lane, ifExpr string, with map[string]string
 	switch ifExpr {
 	case "${{ needs.rbe.outputs.mode != 'skip' }}":
 		return map[string]bool{"remote": true, "fork-ro": true, "fork-rw": true, "cache": true, "local": true}
-	case "${{ needs.rbe.outputs.enabled == 'true' }}":
+	case "${{ (needs.rbe.outputs.enabled == 'true' || needs.rbe.outputs.full-local == 'true') }}":
 		return map[string]bool{"remote": true, "fork-ro": true, "fork-rw": true}
 	case bazelDoltMemberIf:
 		// The dolt-server tier's own job, where bazel-dolt-race does not run
@@ -3308,6 +3312,7 @@ type bazelGateScenario struct {
 	name          string
 	event         string
 	mode, enabled string            // the call's rbe-mode / rbe-enabled outputs
+	fullLocal     string            // the decision to run all tiers locally
 	call          string            // needs.bazel.result
 	outputs       map[string]string // the jobs' result outputs ("" = not reported)
 	// Non-Bazel needs' results that differ from success.
@@ -3400,6 +3405,11 @@ func runPRGateStep(t *testing.T, step ciWorkflowStep, sc bazelGateScenario) (boo
 			got = sc.mode
 		case m[3] == "rbe-enabled":
 			got = sc.enabled
+		case m[3] == "full-local":
+			got = "false"
+			if sc.fullLocal != "" {
+				got = sc.fullLocal
+			}
 		default:
 			// The call's output as GitHub evaluates it over the jobs'
 			// results (a union lane's members read its result first) and
@@ -3424,7 +3434,7 @@ func runPRGateStep(t *testing.T, step ciWorkflowStep, sc bazelGateScenario) (boo
 // pr.yml's actual gate step red, whatever the aggregate says; a missing or
 // inconsistent mode, or an aggregate failure no lane explains, turns it red;
 // and a mode that did not execute the lanes on rbe-west (skip, local, cache)
-// is red even when everything that ran passed (BAZEL_REMOTE).
+// is red even when everything that ran passed (BAZEL_EXECUTION).
 func TestBazelGateSimulation(t *testing.T) {
 	requireHostTool(t, "bash")
 	root := sourceRepoRoot(t)
@@ -3545,10 +3555,10 @@ func TestBazelGateSimulation(t *testing.T) {
 			scFlags := func(name, call string, outputs map[string]string, flags map[string]string, pass bool, mention string) {
 				// The lanes are the Linux Go test tiers' only run: a mode that
 				// executed nothing on rbe-west is red whatever else holds
-				// (BAZEL_REMOTE, TestPRGateRequiresRemoteBazelLanes).
+				// (BAZEL_EXECUTION, TestPRGateRequiresRemoteBazelLanes).
 				if !bazelRemoteModes[mode] {
 					if pass || mention == "" {
-						mention = bazelRemoteGateID
+						mention = bazelExecutionGateID
 					}
 					pass = false
 				}
@@ -3890,6 +3900,11 @@ func TestBazelWorkflowActionsArePinned(t *testing.T) {
 		}
 		for _, step := range list {
 			if strings.Contains(step.Run, "apt-get") {
+				// This fork provisions the remote workers' prerequisites on
+				// its local runner. The dedicated test bounds every apt call.
+				if file == bazelWorkflowName+" "+bazelProxiedJobName && step.Name == "Set up local proxied test dependencies" {
+					continue // TestForkLocalProxiedPrerequisites
+				}
 				t.Errorf("%s step %q runs apt-get; bound it (see ci_workflow_apt_get_timeout_test.go) or drop it", file, step.Name)
 			}
 		}
@@ -4534,8 +4549,9 @@ func TestBazelDoltServerTiers(t *testing.T) {
 		// every lane job ahead of the result recorder. +1: the remote repo
 		// contents cache reader (TestBazelRRCReadSteps). +2: the Bazel
 		// profile prepare/upload steps (TestBazelProfileArtifactStepsAreSafeAndBounded).
-		{bazelProxiedJobName, "doltserver-proxied", "bazel-proxied-testlogs", 13},
-		// One more than bazel-proxied: a "Shard balance" step (rbe-ci-cost-
+		// Proxied also provisions its dependencies for full-local execution.
+		{bazelProxiedJobName, "doltserver-proxied", "bazel-proxied-testlogs", 14},
+		// Server storage instead has a "Shard balance" step (rbe-ci-cost-
 		// latency-study.md recommendation 4), since this is the tier whose
 		// last shard has trailed the rest by 4.3-4.5 min in 2 of 8 runs.
 		{bazelServerJobName, "doltserver-integration", "bazel-server-storage-testlogs", 14},
@@ -4546,7 +4562,7 @@ func TestBazelDoltServerTiers(t *testing.T) {
 		}
 		assertBazelTierStep(t, job, c.job, c.config)
 		if n := len(job.Steps); n != c.wantSteps {
-			t.Errorf("%s has %d steps, want %d (checkout, the rrc reader, setup-bazel, the flaky query, the tier, check_testcases.py, check_shard_coverage.py, [shard_budget.py,] log upload, CI analytics summary, CI analytics upload, profile prepare, profile upload, result recorder)", c.job, n, c.wantSteps)
+			t.Errorf("%s has %d steps, want %d (checkout, [local prerequisites,] the rrc reader, setup-bazel, the flaky query, the tier, check_testcases.py, check_shard_coverage.py, [shard_budget.py,] log upload, CI analytics summary, CI analytics upload, profile prepare, profile upload, result recorder)", c.job, n, c.wantSteps)
 		}
 		logs := job.step(t, "Upload test logs")
 		if logs.If != "${{ failure() && steps.test.outcome != 'skipped' }}" || logs.With["name"] != c.logs || !strings.HasPrefix(logs.Uses, "actions/upload-artifact@") {
@@ -5159,9 +5175,10 @@ func TestBazelRBEJobDecidesOnce(t *testing.T) {
 			bazelRBEJobName, job.Needs, job.If, job.RunsOn, job.Env, wantRBERunsOn)
 	}
 	wantOutputs := map[string]string{
-		"enabled": "${{ steps.decide.outputs.enabled }}",
-		"mode":    "${{ steps.decide.outputs.mode }}",
-		"tier":    "${{ steps.decide.outputs.tier }}",
+		"enabled":    "${{ steps.decide.outputs.enabled }}",
+		"mode":       "${{ steps.decide.outputs.mode }}",
+		"full-local": "${{ steps.decide.outputs.full-local }}",
+		"tier":       "${{ steps.decide.outputs.tier }}",
 		// The remote repo contents cache's switch, from decide's mode
 		// (TestBazelRRCModeStep).
 		"rrc": "${{ steps.rrc.outputs.rrc }}",
@@ -5207,6 +5224,7 @@ func TestBazelRBEJobDecidesOnce(t *testing.T) {
 	for name, want := range map[string]string{
 		"rbe-enabled": "${{ jobs.rbe.outputs.enabled }}",
 		"rbe-mode":    "${{ jobs.rbe.outputs.mode }}",
+		"full-local":  "${{ jobs.rbe.outputs.full-local }}",
 	} {
 		if got := doc.On.WorkflowCall.Outputs[name].Value; got != want {
 			t.Errorf("workflow_call output %s = %q, want %q", name, got, want)
@@ -5343,7 +5361,7 @@ func TestBazelRBEJobDecidesOnce(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := map[string]string{"mode": c.mode, "enabled": c.enabled, "tier": c.tier}
+			want := map[string]string{"mode": c.mode, "enabled": c.enabled, "tier": c.tier, "full-local": "false"}
 			if !reflect.DeepEqual(out, want) {
 				t.Errorf("outputs = %v, want %v", out, want)
 			}
@@ -5379,7 +5397,7 @@ func TestBazelRBEJobDecidesOnce(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if want := map[string]string{"mode": "local", "enabled": "false", "tier": ""}; !reflect.DeepEqual(out, want) {
+			if want := map[string]string{"mode": "local", "enabled": "false", "tier": "", "full-local": "false"}; !reflect.DeepEqual(out, want) {
 				t.Errorf("outputs = %v, want %v", out, want)
 			}
 			if log != "" {
@@ -5941,8 +5959,8 @@ func TestBazelAutofixWorkflowSecurity(t *testing.T) {
 				if want := appTokenActionSHA; sha != want {
 					t.Errorf("step %q uses %q; want actions/create-github-app-token@%s", step.Name, step.Uses, want)
 				}
-				if step.If != "github.event.workflow_run.head_repository.full_name == github.repository" {
-					t.Errorf("app-token step if = %q, want the same-repo check (no token we hold can push to a fork)", step.If)
+				if step.If != "steps.patch.outputs.found == 'true' && github.event.workflow_run.head_repository.full_name == github.repository" {
+					t.Errorf("app-token step if = %q, want a real patch and the same-repo check (no token we hold can push to a fork)", step.If)
 				}
 				want := map[string]string{
 					"app-id":              "${{ secrets.AUTOFIX_APP_ID }}",

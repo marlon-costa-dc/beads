@@ -234,24 +234,28 @@ var advisoryBlacksmithRunnerJobs = []struct {
 // TestSameRepoBlacksmithExpressionSemantics (ci_blacksmith_runner_test.go)
 // covers the shared sameRepoBlacksmith{2,4,8}vcpu consts themselves.
 func TestF7cAdvisorySameRepoBlacksmithExpressionSemantics(t *testing.T) {
-	const ownRepo = "steveyegge/beads"
+	const ownRepo = "gastownhall/beads"
+	const forkRepo = "marlon-costa-dc/beads"
 	type tc struct {
 		name           string
 		event          string
+		repo           string
 		headRepo       string // github.event.pull_request.head.repo.full_name; "" = fork or deleted fork head
 		actor          string
 		wantBlacksmith bool
 	}
 	cases := []tc{
-		{"same-repo PR, human actor", "pull_request", ownRepo, "alice", true},
-		{"merge_group always Blacksmith", "merge_group", "", "", true},
-		{"fork PR stays on fallback", "pull_request", "someone-else/beads", "alice", false},
-		{"deleted fork head stays on fallback", "pull_request", "", "alice", false},
-		{"same-repo PR, dependabot actor stays on fallback", "pull_request", ownRepo, "dependabot[bot]", false},
-		{"push stays on fallback", "push", "", "alice", false},
-		{"pull_request_target stays on fallback", "pull_request_target", ownRepo, "alice", false},
-		{"schedule stays on fallback", "schedule", "", "", false},
-		{"workflow_dispatch stays on fallback", "workflow_dispatch", "", "", false},
+		{"same-repo PR, human actor", "pull_request", ownRepo, ownRepo, "alice", true},
+		{"upstream merge_group uses Blacksmith", "merge_group", ownRepo, "", "", true},
+		{"fork PR stays on fallback", "pull_request", ownRepo, "someone-else/beads", "alice", false},
+		{"deleted fork head stays on fallback", "pull_request", ownRepo, "", "alice", false},
+		{"same-repo PR, dependabot actor stays on fallback", "pull_request", ownRepo, ownRepo, "dependabot[bot]", false},
+		{"push stays on fallback", "push", ownRepo, "", "alice", false},
+		{"pull_request_target stays on fallback", "pull_request_target", ownRepo, ownRepo, "alice", false},
+		{"schedule stays on fallback", "schedule", ownRepo, "", "", false},
+		{"workflow_dispatch stays on fallback", "workflow_dispatch", ownRepo, "", "", false},
+		{"fork repository same-repo PR stays on fallback", "pull_request", forkRepo, forkRepo, "alice", false},
+		{"fork repository merge_group stays on fallback", "merge_group", forkRepo, "", "", false},
 	}
 	for _, j := range advisoryBlacksmithRunnerJobs {
 		job := readCIWorkflow(t, j.file).job(t, j.job)
@@ -260,7 +264,7 @@ func TestF7cAdvisorySameRepoBlacksmithExpressionSemantics(t *testing.T) {
 				ctx := map[string]string{
 					"github.event_name":                             c.event,
 					"github.event.pull_request.head.repo.full_name": c.headRepo,
-					"github.repository":                             ownRepo,
+					"github.repository":                             c.repo,
 					"github.actor":                                  c.actor,
 				}
 				want := j.fallback

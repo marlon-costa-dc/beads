@@ -1647,7 +1647,7 @@ jobs:
             BAZEL_DOLTSERVER
             BAZEL_PROXIED
             BAZEL_SERVER_STORAGE
-            BAZEL_REMOTE
+            BAZEL_EXECUTION
           # The scope job (.github/scripts/ci-scope.sh): SCOPE (set by the
           # run script) is its result, red when its outputs are missing or
           # are not one event's row. It alone excuses a skip: of the ids
@@ -1687,7 +1687,7 @@ jobs:
             BAZEL_PROXIED
             BAZEL_SERVER_STORAGE
             BAZEL_CMD_DOLT
-            BAZEL_REMOTE
+            BAZEL_EXECUTION
           # fast-checks' two base-diff steps; each token reads that step's
           # outcome (via the job's outputs), with a 'skipped' fallback for a
           # lost job (see FAST_CHECKS below). TestPRCIGateFastChecksTokens
@@ -1729,12 +1729,13 @@ jobs:
           # "true": see the run script.
           BAZEL_CMD_DOLT: ${{ needs.bazel.outputs.bazel-cmd-dolt || 'skipped' }}
           # Inputs of bazel-gate.sh, which sets BAZEL (the call's aggregate,
-          # red on a missing or inconsistent mode) and BAZEL_REMOTE, and the
+          # red on a missing or inconsistent mode) and BAZEL_EXECUTION, and the
           # expected skips from bazel.yml's own rbe job decision and, for
           # the Dolt-tier lanes, from what the call reports it ran.
           BAZEL_CALL: ${{ needs.bazel.result }}
           BAZEL_RBE_MODE: ${{ needs.bazel.outputs.rbe-mode }}
           BAZEL_RBE_ENABLED: ${{ needs.bazel.outputs.rbe-enabled }}
+          BAZEL_FULL_LOCAL: ${{ needs.bazel.outputs.full-local }}
           BAZEL_DOLT_TIERS: ${{ needs.bazel.outputs.dolt-tiers }}
         run: |
           skipped_ok=""
@@ -1752,35 +1753,26 @@ jobs:
           SCOPE="$(bash .github/scripts/ci-scope.sh result)"
           export SCOPE
           skipped_ok="$skipped_ok $(bash .github/scripts/ci-scope.sh skips)"
-          # Bazel lanes skipped by design in the call's execution mode (all
-          # of them in mode skip, the remote-only embedded, proxied and
-          # server-storage tiers in modes local and cache (cache: rbe=cache
-          # dispatches only, never a PR), and integration in mode local), the Dolt-tier lanes when the scope turned them
-          # off and the call reports it ran without them (a merge group),
-          # and the aggregate unless the mode is missing or invalid.
+          # The decision excuses only jobs its mode and scope do not run.
+          # full-local excuses no execution-mode skip; a merge group's
+          # Dolt-tier skips still require both scope and call to report off.
           skipped_ok="$skipped_ok $(bash .github/scripts/bazel-gate.sh skips)"
           BAZEL="$(bash .github/scripts/bazel-gate.sh aggregate)"
           export BAZEL
           # The Bazel lanes are the only run of every Linux Go test tier
-          # (there is no legacy job to fall back to), so on every pull_request
-          # and merge group they must have run remotely on rbe-west: mode
-          # remote, or fork-ro/fork-rw through rbe-fork for a PR without the
-          # CI secrets; mode skip (the farm switch off) or local (no
-          # secret, or rbe-fork closed or refusing) is red whatever
-          # bazel-gate.sh's skip list allows; each lane's own result is
-          # required above. A push to main's run never starts the call
-          # (skipped, which only its scope excuses). A fork repository's own
-          # CI (owner id not gastownhall's 255961667, bazel.yml's FORK_REPO)
-          # is always mode local, so a re-run never turns it green: the
-          # message says so instead of asking for one.
-          BAZEL_REMOTE="$(bash .github/scripts/bazel-gate.sh remote)"
-          if [[ "$BAZEL_REMOTE" == not-run-remotely ]]; then
+          # (there is no legacy job to fall back to). Upstream requires
+          # remote execution; this fork's full-local decision runs the same
+          # required jobs on GitHub-hosted runners. Both paths require each
+          # lane's own result above. Partial local, cache and skip modes fail.
+          # A push's unstarted call is excused only by its own scope.
+          BAZEL_EXECUTION="$(bash .github/scripts/bazel-gate.sh execution)"
+          if [[ "$BAZEL_EXECUTION" == incomplete-execution ]]; then
             if [[ "${GITHUB_REPOSITORY_OWNER_ID:-}" != 255961667 ]]; then
-              echo "::error::The Bazel lanes did not run remotely on rbe-west (mode '${BAZEL_RBE_MODE:-none}'): this is a fork repository's own CI ($GITHUB_REPOSITORY), which always runs them in mode local, so this gate stays red here and a re-run will not change that. Open the pull request against gastownhall/beads to run them on rbe-west."
+              echo "::error::The Bazel execution decision is incomplete (mode '${BAZEL_RBE_MODE:-none}', full-local '${BAZEL_FULL_LOCAL:-none}'): this is a fork repository's own CI ($GITHUB_REPOSITORY). All required tiers must run through its full-local policy, or the pull request must target gastownhall/beads for remote execution."
             else
               echo "::error::The Bazel lanes did not run remotely on rbe-west (mode '${BAZEL_RBE_MODE:-none}'); they are this PR's only run of the Linux Go test tiers. In mode local on a PR without the CI secrets, rbe-fork was closed or refused this run: re-run all jobs later."
             fi
           fi
-          export BAZEL_REMOTE
+          export BAZEL_EXECUTION
           export CI_GATE_SKIPPED_OK="$skipped_ok"
           bash .github/scripts/ci-gate.sh

@@ -8,8 +8,9 @@
 # PRs and merge groups run it through pr.yml's `bazel` job (workflow_call).
 # The legacy go test jobs these lanes mirrored are retired (ga-96smfk.22),
 # so pr.yml's ci-gate requires the lanes to have run remotely on rbe-west
-# and passed on every pull_request and merge group (BAZEL_REMOTE): modes
-# skip, local and cache are red there (scripts/pr_risk_bazel_coverage_test.go).
+# and passed on every pull_request and merge group (BAZEL_EXECUTION). This
+# fork instead runs the same required tiers with full-local=true; partial
+# local, cache and skip execution remain red.
 # A merge group runs every lane but the Dolt tiers: pr.yml's scope passes
 # dolt-tiers "off" there, which skips bazel-embedded, bazel-dolt-race and
 # bazel-dolt-int (and their members outside mode remote), and the call
@@ -113,7 +114,9 @@
 #     (ubuntu-latest, or ubuntu-24.04 in the lanes that read the remote repo
 #     contents cache in mode cache), slower but the same results, for every
 #     job but the remote-only ones (bazel-embedded, bazel-proxied,
-#     bazel-server-storage) and bazel-integration, which are skipped. These
+#     bazel-server-storage), integration and cmd-dolt, which are skipped
+#     unless full-local=true for marlon-costa-dc/beads. That fork runs every
+#     required tier locally with explicit larger timeouts. These
 #     runs have no secrets and would otherwise read rbe-cache (mode cache)
 #     from GitHub-hosted runners, which it refuses (and, for a fork
 #     repository's own CI, on every push and PR within the fork, at the
@@ -377,8 +380,11 @@ on:
       rbe-enabled:
         description: "'true' when the lanes executed remotely on rbe-west, else 'false'"
         value: ${{ jobs.rbe.outputs.enabled }}
+      full-local:
+        description: "true when this fork runs every required Bazel tier on GitHub-hosted runners"
+        value: ${{ jobs.rbe.outputs.full-local }}
       rbe-mode:
-        description: "remote, fork-ro or fork-rw (every lane runs remotely), cache (no remote-only jobs but integration), local (no remote-only jobs), or skip (no jobs): the rbe job's decision"
+        description: "remote, fork-ro or fork-rw (remote tiers), cache (partial local tiers with cache), local (all required tiers only with full-local), or skip: the rbe job's decision"
         value: ${{ jobs.rbe.outputs.mode }}
       bazel-test:
         description: "bazel-test's job.status"
@@ -471,7 +477,7 @@ jobs:
   # it, so they all skip and pr.yml's gate is red within a minute, with the
   # diff and the pin to commit in this job's summary. A fallback to mode
   # local would not keep the PR green (pr.yml's ci-gate requires a remote
-  # run, BAZEL_REMOTE) and would only make it slower, so fail fast. gascity
+  # run, BAZEL_EXECUTION) and would only make it slower, so fail fast. gascity
   # unreachable (exit 2: unknown) warns and proceeds: GitHub's availability
   # never blocks a PR. gascity's grace window: a re-pin gascity can roll back
   # (a Go release) publishes a record (worker-env-grace.txt on gascity's
@@ -504,6 +510,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       enabled: ${{ steps.decide.outputs.enabled }}
+      full-local: ${{ steps.decide.outputs.full-local }}
       mode: ${{ steps.decide.outputs.mode }}
       tier: ${{ steps.decide.outputs.tier }}
       rrc: ${{ steps.rrc.outputs.rrc }}
@@ -557,8 +564,13 @@ jobs:
           # budget shut it on 2026-10-19, largely on fork CI runs). It never
           # asks the mint either.
           tier=
+          full_local=false
           if [ "$FORK_REPO" = true ]; then
             mode=local
+            # This fork owns the cost of running every required tier locally.
+            if [ "$GITHUB_REPOSITORY" = marlon-costa-dc/beads ]; then
+              full_local=true
+            fi
           elif [ "$RBE_INPUT_OFF" = true ]; then
             mode=local
           elif [ "$RBE_INPUT_CACHE" = true ]; then
@@ -592,9 +604,13 @@ jobs:
           {
             echo "mode=$mode"
             echo "enabled=$enabled"
+            echo "full-local=$full_local"
             echo "tier=$tier"
           } >> "$GITHUB_OUTPUT"
           echo "Bazel execution mode: **$mode** (RBE_WEST_WORKERS on: $RBE_VAR_ON, rbe=off: $RBE_INPUT_OFF, rbe=cache: $RBE_INPUT_CACHE, fork: $FORK, fork repository: $FORK_REPO, dependabot: $DEPENDABOT, fork farm: $FORK_FARM, executor secret: $HAS_EXECUTOR)" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$full_local" = true ]; then
+            echo "All required Bazel tiers run locally; no upstream RBE or cache credentials are used." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
           if [ "$FORK_REPO" = true ]; then
             echo "Fork repository's own CI ($GITHUB_REPOSITORY): local, no rbe-cache" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
@@ -1575,8 +1591,8 @@ jobs:
   # does not (same race configuration, shared through the remote cache).
   bazel-embedded:
     name: embedded Dolt tier
-    # Remote execution only: skipped unless the rbe job chose remote,
-    # fork-ro or fork-rw (enabled; not in modes cache, local or skip).
+    # Remote execution, or this fork's full-local policy with enough time
+    # for sequential shard waves. Other local, cache and skip calls omit it.
     # Locally the tier is 72 race test
     # processes (50 cmd/bd shards + 20 embeddeddolt storage shards + 2
     # conformance partitions; ~24k test-seconds measured locally -- see
@@ -1612,9 +1628,10 @@ jobs:
     # The runs-on expression is the shared one: Blacksmith in modes remote
     # and cache, GitHub-hosted in the fork modes (a client only).
     needs: rbe
-    runs-on: ${{ (needs.rbe.outputs.mode == 'remote' || needs.rbe.outputs.mode == 'cache') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
-    if: ${{ needs.rbe.outputs.enabled == 'true' && inputs.dolt-tiers != 'off' }}
-    timeout-minutes: 60
+    runs-on: ${{ needs.rbe.outputs.full-local == 'true' && 'ubuntu-24.04' || (needs.rbe.outputs.mode == 'remote' || needs.rbe.outputs.mode == 'cache') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    if: ${{ (needs.rbe.outputs.enabled == 'true' || needs.rbe.outputs.full-local == 'true') && inputs.dolt-tiers != 'off' }}
+    # Local tiers keep the same tests and need a larger CPU-bound budget.
+    timeout-minutes: ${{ needs.rbe.outputs.full-local == 'true' && 300 || 60 }}
     outputs:
       result: ${{ steps.result.outputs.result }}
     steps:
@@ -1666,7 +1683,7 @@ jobs:
       # --build_event_json_file is a command option, so it goes after `test`.
       - name: bazel test //... --config=embedded
         id: test
-        timeout-minutes: 50
+        timeout-minutes: ${{ needs.rbe.outputs.full-local == 'true' && 270 || 50 }}
         run: |
           set -o pipefail
           start=$(date +%s)
@@ -1857,18 +1874,19 @@ jobs:
     # Remote (modes remote, fork-ro, fork-rw), or local with the read-only
     # cache (mode cache: rbe=cache dispatches), which serves every action
     # trusted CI already ran, so only what changed builds and tests on the
-    # Blacksmith runner. Never plain local (rbe=off; fork and Dependabot PRs
-    # while rbe-fork is closed): the tagged race build of //... plus 14
-    # jobs' worth of tests on one runner, cold.
+    # Blacksmith runner. This fork's full-local policy also runs the tagged
+    # race build and all tests on one GitHub-hosted runner, with a larger
+    # timeout for the cold build; other plain-local calls still skip it.
     # A caller may turn it off with integration: "off"; pr.yml and
     # bazel-farm.yml pass "on".
     needs: rbe
     runs-on: ${{ (needs.rbe.outputs.mode == 'remote' || needs.rbe.outputs.mode == 'cache') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
-    if: ${{ (needs.rbe.outputs.enabled == 'true' || needs.rbe.outputs.mode == 'cache') && inputs.integration != 'off' }}
+    if: ${{ (needs.rbe.outputs.enabled == 'true' || needs.rbe.outputs.full-local == 'true' || needs.rbe.outputs.mode == 'cache') && inputs.integration != 'off' }}
     # F5 S2 Variant A added the "Nogo: integration library files" step after
     # `test`; +5 over the previous 85 keeps it headroom without exceeding
     # TestBazelIntegrationJob's test-step-timeout+15 ceiling (75+15=90).
-    timeout-minutes: 90
+    # Local tiers keep the same tests and need a larger CPU-bound budget.
+    timeout-minutes: ${{ needs.rbe.outputs.full-local == 'true' && 180 || 90 }}
     outputs:
       result: ${{ steps.result.outputs.result }}
     steps:
@@ -1921,7 +1939,7 @@ jobs:
       # had finished).
       - name: bazel test //... --config=integration
         id: test
-        timeout-minutes: 75
+        timeout-minutes: ${{ needs.rbe.outputs.full-local == 'true' && 165 || 75 }}
         env:
           EXCLUDE_TARGETS: ${{ inputs.cmd-dolt-required == true && '-//cmd/bd:bd_test' || '' }}
         run: |
@@ -2285,15 +2303,15 @@ jobs:
   # remote bazel-dolt-race runs this tier (see bazel-doltserver's comment).
   bazel-proxied:
     name: proxied-server tier
-    # Remote execution only, like bazel-embedded: 30 concurrent shards, each
-    # running its own dolt sql-server busy on ~4 cores, do not fit a
-    # GitHub-hosted runner regardless of any single shard's wall time.
+    # Remote execution, or this fork's full-local policy with the existing
+    # local_test_jobs limit and a larger timeout for sequential shard waves.
     # This lane is the tier's only PR run (pr-risk.yml's legacy jobs are
     # retired) and pr.yml's gate requires it to have run here and passed.
     needs: rbe
-    runs-on: ${{ (needs.rbe.outputs.mode == 'remote' || needs.rbe.outputs.mode == 'cache') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
-    if: ${{ needs.rbe.outputs.enabled == 'true' && needs.rbe.outputs.mode != 'remote' && inputs.dolt-tiers != 'off' }}
-    timeout-minutes: 30
+    runs-on: ${{ needs.rbe.outputs.full-local == 'true' && 'ubuntu-24.04' || (needs.rbe.outputs.mode == 'remote' || needs.rbe.outputs.mode == 'cache') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    if: ${{ (needs.rbe.outputs.enabled == 'true' || needs.rbe.outputs.full-local == 'true') && needs.rbe.outputs.mode != 'remote' && inputs.dolt-tiers != 'off' }}
+    # Local tiers keep the same tests and need a larger CPU-bound budget.
+    timeout-minutes: ${{ needs.rbe.outputs.full-local == 'true' && 180 || 30 }}
     outputs:
       result: ${{ steps.result.outputs.result }}
     steps:
@@ -2305,6 +2323,26 @@ jobs:
           ref: ${{ inputs.checkout-sha }}
           persist-credentials: false
           allow-unsafe-pr-checkout: ${{ inputs.fork-farm == 'authorized' && github.event_name == 'pull_request_target' }}
+
+      # The same endpoint bridges and offline namespace used on rbe-west.
+      # Ubuntu's documented per-program profile keeps userns available to
+      # unshare without disabling AppArmor's system-wide restriction.
+      - name: Set up local proxied test dependencies
+        if: ${{ needs.rbe.outputs.full-local == 'true' }}
+        timeout-minutes: 10
+        run: |
+          sudo timeout 120 apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo timeout 300 apt-get install --no-install-recommends -y socat apparmor
+          command -v socat
+          sudo tee /etc/apparmor.d/beads-ci-unshare >/dev/null <<'PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+          /usr/bin/unshare flags=(unconfined) {
+            userns,
+          }
+          PROFILE
+          sudo apparmor_parser -r /etc/apparmor.d/beads-ci-unshare
+          unshare --user --map-root-user --net -- ip link set lo up
 
       # The remote repo contents cache, read-only, as in bazel-test.
       - name: Remote repo contents cache (read)
@@ -2355,7 +2393,7 @@ jobs:
       # assuming a hang.
       - name: bazel test //... --config=doltserver-proxied
         id: test
-        timeout-minutes: 25
+        timeout-minutes: ${{ needs.rbe.outputs.full-local == 'true' && 165 || 25 }}
         run: |
           set -o pipefail
           start=$(date +%s)
@@ -2729,15 +2767,15 @@ jobs:
   # max: this job runs there as before.
   bazel-server-storage:
     name: server-Dolt storage tier
-    # Remote execution only, like bazel-integration: locally the tagged race
-    # build of //... alone is most of the timeout. Plus mode remote
-    # (bazel-dolt-int's).
+    # Remote execution, or this fork's full-local policy with a larger
+    # cold-build budget. Mode remote uses bazel-dolt-int instead.
     # This lane is the tier's only PR run (pr-risk.yml's legacy jobs are
     # retired) and pr.yml's gate requires it to have run here and passed.
     needs: rbe
-    runs-on: ${{ (needs.rbe.outputs.mode == 'remote' || needs.rbe.outputs.mode == 'cache') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
-    if: ${{ needs.rbe.outputs.enabled == 'true' && needs.rbe.outputs.mode != 'remote' && inputs.integration != 'off' && inputs.dolt-tiers != 'off' }}
-    timeout-minutes: 30
+    runs-on: ${{ needs.rbe.outputs.full-local == 'true' && 'ubuntu-24.04' || (needs.rbe.outputs.mode == 'remote' || needs.rbe.outputs.mode == 'cache') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    if: ${{ (needs.rbe.outputs.enabled == 'true' || needs.rbe.outputs.full-local == 'true') && needs.rbe.outputs.mode != 'remote' && inputs.integration != 'off' && inputs.dolt-tiers != 'off' }}
+    # Local tiers keep the same tests and need a larger CPU-bound budget.
+    timeout-minutes: ${{ needs.rbe.outputs.full-local == 'true' && 180 || 30 }}
     outputs:
       result: ${{ steps.result.outputs.result }}
     steps:
@@ -2790,7 +2828,7 @@ jobs:
       # timeout is 15m per shard, 1200s Bazel cap), plus a compile.
       - name: bazel test //... --config=doltserver-integration
         id: test
-        timeout-minutes: 25
+        timeout-minutes: ${{ needs.rbe.outputs.full-local == 'true' && 165 || 25 }}
         run: |
           set -o pipefail
           start=$(date +%s)
@@ -2940,9 +2978,8 @@ jobs:
   # --config=integration's build flags, so it shares bazel-integration's
   # compile through the remote cache. Runs exactly where bazel-integration runs (the same if):
   # remotely (modes remote, fork-ro, fork-rw), or locally with the
-  # read-only cache (mode cache: rbe=cache dispatches), never plain local
-  # (rbe=off; fork and Dependabot PRs while rbe-fork is closed), and not
-  # when a caller passes integration: "off".
+  # read-only cache (mode cache: rbe=cache dispatches), or this fork's
+  # full-local policy. Other plain-local calls and integration: "off" skip it.
   # Advisory: job-level continue-on-error keeps a failure out of this
   # call's aggregate result (BAZEL), and pr.yml's ci-gate requires the
   # lane's own result (BAZEL_CMD_DOLT) only while pr.yml's committed
@@ -2957,8 +2994,9 @@ jobs:
     # comment above.
     needs: rbe
     runs-on: ${{ (needs.rbe.outputs.mode == 'remote' || needs.rbe.outputs.mode == 'cache') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
-    if: ${{ (needs.rbe.outputs.enabled == 'true' || needs.rbe.outputs.mode == 'cache') && inputs.integration != 'off' && needs.rbe.outputs.mode != 'remote' && inputs.dolt-tiers != 'off' }}
-    timeout-minutes: 85
+    if: ${{ (needs.rbe.outputs.enabled == 'true' || needs.rbe.outputs.full-local == 'true' || needs.rbe.outputs.mode == 'cache') && inputs.integration != 'off' && needs.rbe.outputs.mode != 'remote' && inputs.dolt-tiers != 'off' }}
+    # Local tiers keep the same tests and need a larger CPU-bound budget.
+    timeout-minutes: ${{ needs.rbe.outputs.full-local == 'true' && 180 || 85 }}
     continue-on-error: true
     outputs:
       result: ${{ steps.result.outputs.result }}
@@ -3007,7 +3045,7 @@ jobs:
       # closed, add the cold race build (~30).
       - name: bazel test //... --config=doltserver-cmd
         id: test
-        timeout-minutes: 75
+        timeout-minutes: ${{ needs.rbe.outputs.full-local == 'true' && 165 || 75 }}
         run: |
           set -o pipefail
           start=$(date +%s)

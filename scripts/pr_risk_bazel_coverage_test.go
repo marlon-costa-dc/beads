@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // ga-96smfk.22: the Linux Go test tiers run only as pr.yml's Bazel lanes
@@ -19,8 +21,8 @@ import (
 // the bazel-coverage decision and the BAZEL_RETIRES_LEGACY_* /
 // BAZEL_COVERS_FORKS flags that chose between them and the lanes. So on
 // every pull_request and merge group pr.yml's gate requires the lanes to
-// have run remotely on rbe-west (BAZEL_REMOTE) and passed: no execution mode
-// can leave the gate green with a tier unrun.
+// have run remotely on rbe-west, or all required tiers locally in this fork
+// (BAZEL_EXECUTION), and passed: no tier may be silently left unrun.
 
 const (
 	prRiskWorkflowName     = "pr-risk.yml"
@@ -28,8 +30,8 @@ const (
 	// The decision's Dependabot test: Dependabot runs get no Actions
 	// secrets, so bazel.yml's rbe job sends them to rbe-fork like forks.
 	prRiskDependabotValue = "${{ github.actor == 'dependabot[bot]' }}"
-	// pr.yml's gate id for "the Bazel lanes ran remotely".
-	bazelRemoteGateID = "BAZEL_REMOTE"
+	// pr.yml's gate id for complete execution of the required Bazel tiers.
+	bazelExecutionGateID = "BAZEL_EXECUTION"
 	// The decision's fork-repository test: a fork repository's own CI
 	// (not a fork PR into beads) is mode local, so it never reads rbe-cache.
 	// The owner's id, not its name: an org rename keeps upstream upstream.
@@ -192,7 +194,7 @@ func bazelPRCallLanes(t *testing.T, with map[string]string) map[string]map[strin
 // variable, the executor secret, fork, Dependabot, what rbe-fork's mint
 // answers), pr.yml's actual gate step, with every lane that runs in the
 // decided mode passing, is green exactly when that mode executed the lanes
-// on rbe-west, and a red one names BAZEL_REMOTE. A lane that failed, was
+// on rbe-west, and a red one names BAZEL_EXECUTION. A lane that failed, was
 // cancelled or did not report reds the gate in a remote mode too.
 func TestPRGateRequiresRemoteBazelLanes(t *testing.T) {
 	requireHostTool(t, "bash")
@@ -212,11 +214,11 @@ func TestPRGateRequiresRemoteBazelLanes(t *testing.T) {
 	lanes := lanesFor["pull_request"]
 
 	required := strings.Fields(gateStep.Env["CI_GATE_REQUIRED"])
-	if !contains(required, bazelRemoteGateID) {
-		t.Errorf("pr.yml's ci-gate does not require %s", bazelRemoteGateID)
+	if !contains(required, bazelExecutionGateID) {
+		t.Errorf("pr.yml's ci-gate does not require %s", bazelExecutionGateID)
 	}
-	if _, ok := gateStep.Env[bazelRemoteGateID]; ok {
-		t.Errorf("pr.yml's ci-gate env sets %s; only its run script may", bazelRemoteGateID)
+	if _, ok := gateStep.Env[bazelExecutionGateID]; ok {
+		t.Errorf("pr.yml's ci-gate env sets %s; only its run script may", bazelExecutionGateID)
 	}
 	for lane, id := range bazelLaneGateIDs {
 		if bazelLaneReporter(lanes, lane, "remote") == "" {
@@ -242,8 +244,8 @@ func TestPRGateRequiresRemoteBazelLanes(t *testing.T) {
 			var log string
 			pass, log = runPRGateStep(t, gateStep, prGateFor(t, lanesFor[f.event], f.event, mode))
 			gateMemo[key] = pass
-			if !pass && !regexp.MustCompile(`::error::`+bazelRemoteGateID+`\b`).MatchString(log) {
-				t.Errorf("%v (mode %s): red gate does not name %s:\n%s", f, mode, bazelRemoteGateID, log)
+			if !pass && !regexp.MustCompile(`::error::`+bazelExecutionGateID+`\b`).MatchString(log) {
+				t.Errorf("%v (mode %s): red gate does not name %s:\n%s", f, mode, bazelExecutionGateID, log)
 			}
 		}
 		if pass != bazelRemoteModes[mode] {
@@ -297,7 +299,7 @@ func TestPRGateRequiresRemoteBazelLanes(t *testing.T) {
 		}
 	}
 
-	// A red BAZEL_REMOTE says what to do: in a fork repository's own CI
+	// A red BAZEL_EXECUTION says what to do: in a fork repository's own CI
 	// (always mode local, FORK_REPO) a re-run never helps, so the message
 	// names that case instead of asking for one; in gastownhall a local run
 	// means rbe-fork was closed or refused, and a later re-run may pass.
@@ -335,8 +337,8 @@ func TestPRGateRequiresRemoteBazelLanes(t *testing.T) {
 		for lane := range bazelLaneGateIDs {
 			sc.outputs[lane] = "success"
 		}
-		if pass, log := runPRGateStep(t, gateStep, sc); pass || !strings.Contains(log, "::error::"+bazelRemoteGateID) {
-			t.Errorf("mode %s, every lane reported success: gate pass = %v, want red naming %s\n%s", mode, pass, bazelRemoteGateID, log)
+		if pass, log := runPRGateStep(t, gateStep, sc); pass || !strings.Contains(log, "::error::"+bazelExecutionGateID) {
+			t.Errorf("mode %s, every lane reported success: gate pass = %v, want red naming %s\n%s", mode, pass, bazelExecutionGateID, log)
 		}
 	}
 }
@@ -347,6 +349,247 @@ func copyMap(m map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// The fork's execution policy must run the same required jobs, not turn
+// their intentional skips into a green check. Exercise the real decision,
+// job conditions and gate, including failures after a successful call.
+func TestForkLocalBazelTiersAndGate(t *testing.T) {
+	requireHostTool(t, "bash")
+	workflow := readCIWorkflow(t, bazelWorkflowName)
+	pr := readCIWorkflow(t, "pr.yml")
+	decision := workflow.job(t, bazelRBEJobName).Steps[0]
+	gate := pr.job(t, "ci-gate").step(t, "Evaluate CI gate")
+	const forkRepo = "marlon-costa-dc/beads"
+	for _, c := range []struct {
+		repo, fullLocal string
+		forkRepo        bool
+	}{
+		{forkRepo, "true", true},
+		{bazelForkRepoName, "false", true},
+		{mergeQueueOwnRepo, "false", false},
+	} {
+		facts := rbeFacts{event: "pull_request", rbeVar: "true", secret: "x", forkRepo: c.forkRepo}
+		env := map[string]string{"GITHUB_REPOSITORY": c.repo}
+		for k, v := range decision.Env {
+			env[k] = evalRBEExpr(t, v, facts, pr.job(t, "bazel").With)
+		}
+		out, log, err := runBazelRBEDecisionLog(t, decision.Run, env)
+		if err != nil || out["full-local"] != c.fullLocal {
+			t.Fatalf("%s decision: outputs %v, error %v; want full-local=%s", c.repo, out, err, c.fullLocal)
+		}
+		if c.forkRepo && (out["mode"] != "local" || out["enabled"] != "false" || log != "") {
+			t.Errorf("%s: outputs %v, mint log %q; fork execution must stay local without contacting upstream", c.repo, out, log)
+		}
+	}
+
+	ids := copyMap(bazelLaneGateIDs)
+	flags := map[string]string{"GITHUB_REPOSITORY": forkRepo, "GITHUB_REPOSITORY_OWNER_ID": "31337"}
+	for lane, g := range bazelFlagGatedLanes {
+		flags[g.flag] = pr.Env[g.flag]
+		if flags[g.flag] == "true" {
+			ids[lane] = g.id
+		}
+	}
+	for _, event := range rbeGateEvents {
+		with := prCallWithFor(t, event)
+		ctx := map[string]string{
+			"needs.rbe.outputs.mode": "local", "needs.rbe.outputs.enabled": "false",
+			"needs.rbe.outputs.full-local": "true",
+		}
+		for k, v := range with {
+			ctx["inputs."+k] = v
+		}
+		base := bazelGateScenario{
+			event: event, mode: "local", enabled: "false", fullLocal: "true", call: "success",
+			outputs: map[string]string{}, flags: flags, callWith: with,
+		}
+		for lane := range ids {
+			if evalRRCIf(t, workflow.job(t, lane).If, ctx) {
+				base.outputs[lane] = "success"
+			} else if event == "pull_request" {
+				t.Errorf("fork PR omits required lane %s", lane)
+			}
+		}
+		for union := range bazelUnionLanes {
+			if evalRRCIf(t, workflow.job(t, union).If, ctx) {
+				t.Errorf("%s: remote union %s duplicates the local member jobs", event, union)
+			}
+		}
+		if pass, log := runPRGateStep(t, gate, base); !pass {
+			t.Fatalf("%s: all required local jobs succeeded but gate failed:\n%s", event, log)
+		}
+		for lane := range base.outputs {
+			for _, result := range []string{"failure", "cancelled", "skipped", ""} {
+				sc := base
+				sc.outputs = copyMap(base.outputs)
+				sc.outputs[lane] = result
+				if pass, log := runPRGateStep(t, gate, sc); pass || !strings.Contains(log, "::error::"+ids[lane]) {
+					t.Errorf("%s, %s=%q: gate pass=%v; want failure naming %s\n%s", event, lane, result, pass, ids[lane], log)
+				}
+			}
+		}
+		for _, c := range []struct{ mode, enabled, fullLocal string }{
+			{"local", "false", "false"}, {"local", "false", "invalid"},
+			{"local", "true", "true"}, {"remote", "true", "true"}, {"cache", "false", "true"},
+			{"skip", "false", "true"}, {"fork-ro", "true", "true"}, {"fork-rw", "true", "true"},
+		} {
+			sc := base
+			sc.mode, sc.enabled, sc.fullLocal = c.mode, c.enabled, c.fullLocal
+			if pass, log := runPRGateStep(t, gate, sc); pass || !strings.Contains(log, "::error::"+bazelExecutionGateID) {
+				t.Errorf("%s, inconsistent decision %+v: gate pass=%v\n%s", event, c, pass, log)
+			}
+			if c.fullLocal != "false" {
+				cmd := exec.Command("bash", bazelGateScript, "skips")
+				cmd.Dir = sourceRepoRoot(t)
+				cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "BAZEL_RBE_MODE=" + c.mode,
+					"BAZEL_RBE_ENABLED=" + c.enabled, "BAZEL_FULL_LOCAL=" + c.fullLocal,
+					"SCOPE_DOLT_TIERS=off", "BAZEL_DOLT_TIERS=off"}
+				if out, err := cmd.CombinedOutput(); err != nil || strings.TrimSpace(string(out)) != "" {
+					t.Errorf("invalid decision %+v grants skips %q (error %v)", c, out, err)
+				}
+			}
+		}
+	}
+
+	// Resolve both branches of the typed YAML timeouts. Longer fork budgets
+	// must not change the upstream budgets checked by existing policies.
+	for _, c := range []struct {
+		lane                           string
+		localJob, localTest, job, test int
+	}{
+		{bazelEmbedJobName, 300, 270, 60, 50},
+		{bazelIntegJobName, 180, 165, 90, 75},
+		{bazelProxiedJobName, 180, 165, 30, 25},
+		{bazelServerJobName, 180, 165, 30, 25},
+		{bazelCmdDoltJobName, 180, 165, 85, 75},
+	} {
+		job := workflow.job(t, c.lane)
+		if got, err := job.Timeout.minutes(true); err != nil || got != c.localJob || job.TimeoutMinutes != c.job {
+			t.Errorf("%s job timeout local=%d upstream=%d error=%v, want %d/%d", c.lane, got, job.TimeoutMinutes, err, c.localJob, c.job)
+		}
+		ctx := map[string]string{"needs.rbe.outputs.mode": "local", "needs.rbe.outputs.full-local": "true"}
+		if got := mustEvalGHRunsOn(t, job.RunsOn, ctx); got != "ubuntu-24.04" {
+			t.Errorf("%s full-local runner %q, want ubuntu-24.04", c.lane, got)
+		}
+		foundTest := false
+		for _, step := range job.Steps {
+			if step.ID == "test" {
+				foundTest = true
+				if got, err := step.Timeout.minutes(true); err != nil || got != c.localTest || step.TimeoutMinutes != c.test {
+					t.Errorf("%s test timeout local=%d upstream=%d error=%v, want %d/%d", c.lane, got, step.TimeoutMinutes, err, c.localTest, c.test)
+				}
+			}
+		}
+		if !foundTest {
+			t.Errorf("%s has no test step", c.lane)
+		}
+	}
+}
+
+func TestForkLocalProxiedPrerequisites(t *testing.T) {
+	job := readCIWorkflow(t, bazelWorkflowName).job(t, bazelProxiedJobName)
+	step := job.step(t, "Set up local proxied test dependencies")
+	for _, fullLocal := range []string{"true", "false", ""} {
+		if got := evalRRCIf(t, step.If, map[string]string{"needs.rbe.outputs.full-local": fullLocal}); got != (fullLocal == "true") {
+			t.Errorf("full-local=%q: provision=%v", fullLocal, got)
+		}
+	}
+	if step.ContinueOnError != nil || step.TimeoutMinutes != 10 {
+		t.Errorf("prerequisites must fail closed with a 10-minute budget")
+	}
+	var aptCalls []string
+	for _, line := range strings.Split(step.Run, "\n") {
+		if strings.Contains(line, "apt-get") {
+			aptCalls = append(aptCalls, strings.TrimSpace(line))
+		}
+	}
+	wantApt := []string{
+		"sudo timeout 120 apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update",
+		"sudo timeout 300 apt-get install --no-install-recommends -y socat apparmor",
+	}
+	if !reflect.DeepEqual(aptCalls, wantApt) || step.TimeoutMinutes*60 <= 120+300 {
+		t.Errorf("unbounded or unexpected apt calls %q; want %q within the step budget", aptCalls, wantApt)
+	}
+	for _, required := range []string{
+		"command -v socat", "/usr/bin/unshare flags=(unconfined)", "userns,",
+		"sudo apparmor_parser -r /etc/apparmor.d/beads-ci-unshare",
+		"unshare --user --map-root-user --net -- ip link set lo up",
+	} {
+		if !strings.Contains(step.Run, required) {
+			t.Errorf("local proxied prerequisites omit %q", required)
+		}
+	}
+	for _, s := range job.Steps {
+		if s.Name == step.Name {
+			return
+		}
+		if s.Uses == "./.github/actions/setup-bazel" || s.ID == "test" {
+			t.Fatal("local prerequisites must be checked before the cold Bazel setup/build")
+		}
+	}
+}
+
+func TestCIWorkflowTimeoutDecoder(t *testing.T) {
+	for _, c := range []struct {
+		scalar          string
+		upstream, local int
+		valid           bool
+	}{
+		{"5", 5, 5, true},
+		{"${{ needs.rbe.outputs.full-local == 'true' && 180 || 30 }}", 30, 180, true},
+		{"${{ needs.rbe.outputs.full-local == 'true' && 0 || 30 }}", 0, 0, false},
+		{"${{ needs.rbe.outputs.enabled == 'true' && 180 || 30 }}", 0, 0, false},
+		{"bogus", 0, 0, false},
+	} {
+		var job ciWorkflowJob
+		err := yaml.Unmarshal([]byte("timeout-minutes: "+c.scalar+"\nsteps:\n  - timeout-minutes: "+c.scalar), &job)
+		if (err == nil) != c.valid {
+			t.Errorf("%s: decode error=%v, want valid=%v", c.scalar, err, c.valid)
+		}
+		if err != nil {
+			continue
+		}
+		for _, value := range []ciWorkflowTimeout{job.Timeout, job.Steps[0].Timeout} {
+			if got, err := value.minutes(true); err != nil || got != c.local {
+				t.Errorf("%s: full-local timeout=%d error=%v, want %d", c.scalar, got, err, c.local)
+			}
+		}
+		if job.TimeoutMinutes != c.upstream || job.Steps[0].TimeoutMinutes != c.upstream {
+			t.Errorf("%s: upstream timeout=%d/%d, want %d", c.scalar, job.TimeoutMinutes, job.Steps[0].TimeoutMinutes, c.upstream)
+		}
+	}
+}
+
+func TestAutofixTokenRequiresPatch(t *testing.T) {
+	for _, name := range []string{"bazel-autofix.yml", "docs-autofix.yml"} {
+		workflow := readCIWorkflow(t, name)
+		found := false
+		for _, job := range workflow.Jobs {
+			for _, step := range job.Steps {
+				if step.ID != "app-token" {
+					continue
+				}
+				found = true
+				for _, patch := range []string{"true", "false", ""} {
+					for _, head := range []string{"marlon-costa-dc/beads", "someone/beads", ""} {
+						ctx := map[string]string{
+							"steps.patch.outputs.found":                           patch,
+							"github.event.workflow_run.head_repository.full_name": head,
+							"github.repository":                                   "marlon-costa-dc/beads",
+						}
+						want := patch == "true" && head == ctx["github.repository"]
+						if got := evalRRCIf(t, step.If, ctx); got != want {
+							t.Errorf("%s patch=%q head=%q: mint token=%v, want %v", name, patch, head, got, want)
+						}
+					}
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s has no app-token step", name)
+		}
+	}
 }
 
 // Review F5: each manifest-sharded Bazel lane (embedded, proxied, server

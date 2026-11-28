@@ -96,6 +96,10 @@ func isBazelRRCCacheReader(name string) bool {
 // (ga-vnycm2.8: 17-38 s on 2 vCPU, 12-26 s on 4), so 4 vCPU.
 var bazelLaneRunsOn = bazelRemoteRunsOn("blacksmith-4vcpu-ubuntu-2404")
 
+// The newly local tiers keep a stable OS while upstream runner selection
+// remains unchanged. The rbe decision is still the only policy input.
+var bazelFullLocalRunsOn = "${{ needs.rbe.outputs.full-local == 'true' && 'ubuntu-24.04' || " + strings.TrimPrefix(bazelLaneRunsOn, "${{ ")
+
 // rbe-prewarm only dispatches a pool worker: no Bazel client, 2 vCPU.
 var bazelPrewarmRunsOn = bazelRemoteRunsOn("blacksmith-2vcpu-ubuntu-2404")
 

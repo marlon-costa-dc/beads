@@ -264,7 +264,7 @@ func TestMergeQueuePullRequestFieldsHandleMergeGroup(t *testing.T) {
 
 // Merge groups: bazel.yml's rbe step, evaluated by evalGHExpr for a merge
 // group, takes mode remote with the CI secrets, so pr.yml's gate (which
-// requires every lane to have run remotely, BAZEL_REMOTE) can pass. Without
+// requires every lane to have run remotely, BAZEL_EXECUTION) can pass. Without
 // the secret or with the farm switch off the mode is local or skip, and the
 // gate is red (TestPRGateRequiresRemoteBazelLanes).
 func TestMergeQueueBazelRunsRemotely(t *testing.T) {

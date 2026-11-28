@@ -7,14 +7,14 @@
 #   bazel-gate.sh skips      the Bazel gate ids whose job is skipped by design
 #                            in this mode, for CI_GATE_SKIPPED_OK:
 #                              skip:   every lane and the aggregate (BAZEL)
-#                              local:  the remote-only BAZEL_EMBEDDED,
+#                              local without full-local: BAZEL_EMBEDDED,
 #                                      BAZEL_PROXIED, BAZEL_SERVER_STORAGE,
 #                                      BAZEL_INTEGRATION and BAZEL_CMD_DOLT
 #                              cache:  BAZEL_EMBEDDED, BAZEL_PROXIED,
 #                                      BAZEL_SERVER_STORAGE (integration
 #                                      and cmd-dolt run with the read-only
 #                                      cache)
-#                              remote, fork-ro, fork-rw: none
+#                              remote, fork-ro, fork-rw, full-local: none
 #                            plus, in any of them, the Dolt-tier lanes
 #                            (BAZEL_EMBEDDED, BAZEL_DOLTSERVER, BAZEL_PROXIED,
 #                            BAZEL_SERVER_STORAGE, BAZEL_CMD_DOLT) when pr.yml's
@@ -26,13 +26,14 @@
 #                            aggregate result, or, when the mode is missing
 #                            or invalid (the rbe job failed), an unexpected
 #                            value that ci-gate.sh rejects.
-#   bazel-gate.sh remote     the value to gate on for BAZEL_REMOTE: success
+#   bazel-gate.sh execution  the value to gate on for BAZEL_EXECUTION: success
 #                            when the lanes executed on rbe-west (modes
-#                            remote, fork-ro, fork-rw), else not-run-remotely.
+#                            remote, fork-ro, fork-rw), or full-local runs
+#                            every tier on this fork, else incomplete-execution.
 #
 # A call that never started (pr.yml's scope skipped it on a push to main,
 # where bazel.yml's own push run is every lane, or the scope job failed)
-# reports no mode and no result: its aggregate and remote check read skipped,
+# reports no mode and no result: its aggregate and execution check read skipped,
 # which only the scope's own skips (ci-scope.sh) may excuse, and it excuses
 # nothing here. Any other skip, a failure, a cancellation, or a lane that
 # should run but reported nothing (pr.yml maps an empty output to skipped)
@@ -40,15 +41,22 @@
 #
 # Inputs (environment): BAZEL_RBE_MODE, BAZEL_RBE_ENABLED, BAZEL_DOLT_TIERS
 # (the call's rbe-mode / rbe-enabled / dolt-tiers outputs), BAZEL_CALL
-# (needs.bazel.result), SCOPE_DOLT_TIERS (the scope job's dolt-tiers output).
+# (needs.bazel.result), SCOPE_DOLT_TIERS (the scope job's dolt-tiers output),
+# BAZEL_FULL_LOCAL (the decision's explicit full-local tier execution).
 
 set -euo pipefail
 
 mode="${BAZEL_RBE_MODE:-}"
 enabled="${BAZEL_RBE_ENABLED:-}"
+full_local="${BAZEL_FULL_LOCAL:-false}"
 valid=false
 case "$mode/$enabled" in
     remote/true | fork-ro/true | fork-rw/true | local/false | cache/false | skip/false) valid=true ;;
+esac
+case "$full_local" in
+    false) ;;
+    true) [[ "$mode/$enabled" == local/false ]] || valid=false ;;
+    *) valid=false ;;
 esac
 not_started=false
 if [[ "${BAZEL_CALL:-}" == skipped && -z "$mode" && -z "$enabled" ]]; then
@@ -67,7 +75,11 @@ case "${1:-}" in
         if [[ "$valid" == true ]]; then
             case "$mode" in
                 skip) add BAZEL BAZEL_TEST BAZEL_PURE BAZEL_RELEASE_CROSS BAZEL_EMBEDDED BAZEL_INTEGRATION BAZEL_DOLTSERVER BAZEL_PROXIED BAZEL_SERVER_STORAGE BAZEL_CMD_DOLT ;;
-                local) add BAZEL_EMBEDDED BAZEL_INTEGRATION BAZEL_PROXIED BAZEL_SERVER_STORAGE BAZEL_CMD_DOLT ;;
+                local)
+                    if [[ "$full_local" != true ]]; then
+                        add BAZEL_EMBEDDED BAZEL_INTEGRATION BAZEL_PROXIED BAZEL_SERVER_STORAGE BAZEL_CMD_DOLT
+                    fi
+                    ;;
                 cache) add BAZEL_EMBEDDED BAZEL_PROXIED BAZEL_SERVER_STORAGE ;;
             esac
             if [[ "${SCOPE_DOLT_TIERS:-}" == off && "${BAZEL_DOLT_TIERS:-}" == off ]]; then
@@ -85,17 +97,17 @@ case "${1:-}" in
             echo "${BAZEL_CALL:-}"
         fi
         ;;
-    remote)
+    execution)
         if [[ "$not_started" == true ]]; then
             echo skipped
-        elif [[ "$valid" == true && "$enabled" == true ]]; then
+        elif [[ "$valid" == true && ( "$enabled" == true || "$full_local" == true ) ]]; then
             echo success
         else
-            echo not-run-remotely
+            echo incomplete-execution
         fi
         ;;
     *)
-        echo "usage: $0 skips|aggregate|remote" >&2
+        echo "usage: $0 skips|aggregate|execution" >&2
         exit 2
         ;;
 esac

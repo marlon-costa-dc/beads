@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: upstream-main-mirror
@@ -17,13 +17,39 @@ jobs:
     if: github.repository == 'marlon-costa-dc/beads'
     runs-on: ubuntu-24.04
     steps:
+      - name: Require upstream sync app credentials
+        env:
+          UPSTREAM_SYNC_APP_CLIENT_ID: ${{ secrets.UPSTREAM_SYNC_APP_CLIENT_ID }}
+          UPSTREAM_SYNC_APP_PRIVATE_KEY: ${{ secrets.UPSTREAM_SYNC_APP_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$UPSTREAM_SYNC_APP_CLIENT_ID" || -z "$UPSTREAM_SYNC_APP_PRIVATE_KEY" ]]; then
+            echo '::error::Configure UPSTREAM_SYNC_APP_CLIENT_ID and UPSTREAM_SYNC_APP_PRIVATE_KEY for the beads GitHub App with Contents and Workflows write access. See engdocs/FORK_OPERATIONS.md.'
+            exit 1
+          fi
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           ref: main
           fetch-depth: 0
+          persist-credentials: false
       - name: Fast-forward the fork mirror
         run: |
           git fetch --no-tags https://github.com/gastownhall/beads.git refs/heads/main
           git merge --ff-only FETCH_HEAD
           test "$(git rev-parse HEAD)" = "$(git rev-parse FETCH_HEAD)"
+      - name: Mint upstream sync app token
+        id: sync-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ secrets.UPSTREAM_SYNC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.UPSTREAM_SYNC_APP_PRIVATE_KEY }}
+          owner: marlon-costa-dc
+          repositories: beads
+          permission-contents: write
+          permission-workflows: write
+      - name: Publish the fork mirror
+        env:
+          GH_TOKEN: ${{ steps.sync-token.outputs.token }}
+        run: |
+          gh auth setup-git
           git push origin HEAD:refs/heads/main
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$(git rev-parse HEAD)"

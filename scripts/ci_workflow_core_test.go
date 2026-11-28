@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -33,7 +35,8 @@ type ciWorkflowJob struct {
 	RunsOn          string                `yaml:"runs-on"`
 	If              string                `yaml:"if"`
 	ContinueOnError bool                  `yaml:"continue-on-error"`
-	TimeoutMinutes  int                   `yaml:"timeout-minutes"`
+	TimeoutMinutes  int                   `yaml:"-"`
+	Timeout         ciWorkflowTimeout     `yaml:"timeout-minutes"`
 	Strategy        ciWorkflowStrategy    `yaml:"strategy"`
 	Env             map[string]string     `yaml:"env"`
 	Outputs         map[string]string     `yaml:"outputs"`
@@ -88,12 +91,59 @@ type ciWorkflowStep struct {
 	Run             string            `yaml:"run"`
 	Shell           string            `yaml:"shell"`
 	ContinueOnError any               `yaml:"continue-on-error"`
-	TimeoutMinutes  int               `yaml:"timeout-minutes"`
+	TimeoutMinutes  int               `yaml:"-"`
+	Timeout         ciWorkflowTimeout `yaml:"timeout-minutes"`
 	Env             map[string]string `yaml:"env"`
 	With            map[string]string `yaml:"with"`
 }
 
 type ciWorkflowStringList []string
+
+// TimeoutMinutes is the upstream budget used by existing policy checks.
+// Keep the YAML scalar too, so fork checks resolve its full-local branch.
+// Decoding lives on the types because mutation tests and artifact collectors
+// also decode these jobs and steps directly, without readCIWorkflow.
+type ciWorkflowTimeout string
+
+func (value ciWorkflowTimeout) minutes(fullLocal bool) (int, error) {
+	if value == "" {
+		return 0, nil
+	}
+	if n, err := strconv.Atoi(string(value)); err == nil && n >= 0 {
+		return n, nil
+	}
+	conditional := regexp.MustCompile(`^\$\{\{ needs\.rbe\.outputs\.full-local == 'true' && ([1-9][0-9]*) \|\| ([1-9][0-9]*) \}\}$`)
+	m := conditional.FindStringSubmatch(string(value))
+	if m == nil {
+		return 0, fmt.Errorf("unsupported timeout-minutes %q", value)
+	}
+	// Both operands are positive, so GitHub's &&/|| selects the first
+	// only for full-local=true. Zero (falsy) is deliberately not accepted.
+	if fullLocal {
+		return strconv.Atoi(m[1])
+	}
+	return strconv.Atoi(m[2])
+}
+
+func (job *ciWorkflowJob) UnmarshalYAML(node *yaml.Node) error {
+	type plain ciWorkflowJob
+	if err := node.Decode((*plain)(job)); err != nil {
+		return err
+	}
+	var err error
+	job.TimeoutMinutes, err = job.Timeout.minutes(false)
+	return err
+}
+
+func (step *ciWorkflowStep) UnmarshalYAML(node *yaml.Node) error {
+	type plain ciWorkflowStep
+	if err := node.Decode((*plain)(step)); err != nil {
+		return err
+	}
+	var err error
+	step.TimeoutMinutes, err = step.Timeout.minutes(false)
+	return err
+}
 
 func (items *ciWorkflowStringList) UnmarshalYAML(node *yaml.Node) error {
 	switch node.Kind {
